@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: samba
+  namespace: nas
+spec:
+  type: LoadBalancer
+  # Preserve real client IPs in Samba logs
+  externalTrafficPolicy: Local
+  selector:
+    app: samba
+  ports:
+    - name: smb
+      port: 445
+      targetPort: smb
+      protocol: TCP

@@ -1,0 +1,10 @@
+# Real Kubernetes Secrets — never commit (templates live as *.yaml.example)
+**/10-secret.yaml
+
+# Plaintext credentials
+secrets/
+CREDENTIALS.txt
+
+# Point-in-time backups (large, go stale)
+backups/
+*.zip

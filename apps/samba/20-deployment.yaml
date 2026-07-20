@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: samba
+  namespace: nas
+  labels:
+    app: samba
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: samba
+  template:
+    metadata:
+      labels:
+        app: samba
+    spec:
+      containers:
+        - name: samba
+          image: ghcr.io/servercontainers/samba:latest
+          envFrom:
+            - secretRef:
+                name: samba-config
+          env:
+            - name: TZ
+              value: America/Los_Angeles
+            # SMB only — skip NetBIOS/avahi/wsdd2 discovery daemons inside the pod
+            - name: AVAHI_DISABLE
+              value: "1"
+            - name: WSDD2_DISABLE
+              value: "1"
+            - name: NETBIOS_DISABLE
+              value: "1"
+          ports:
+            - name: smb
+              containerPort: 445
+              protocol: TCP
+          volumeMounts:
+            - name: nas-data
+              mountPath: /shares/nas
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 50m
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: nas-data
+          hostPath:
+            path: /home/rbelan/shared/nas
+            type: Directory
