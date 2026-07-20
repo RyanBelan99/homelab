@@ -29,9 +29,12 @@ spec:
             # Answer queries arriving on any interface (traffic comes in via the ServiceLB pod)
             - name: FTLCONF_dns_listeningMode
               value: all
-            # Initial upstreams; the Teleporter restore will overwrite with your real settings
+            # Upstream is the in-pod unbound DoT forwarder (see the unbound sidecar
+            # below). Pi-hole forwards here in plaintext over localhost; unbound
+            # re-sends encrypted (TLS) to Cloudflare + Quad9. Do not set upstreams
+            # in the web UI — this env var wins on every restart.
             - name: FTLCONF_dns_upstreams
-              value: 1.1.1.1;9.9.9.9
+              value: 127.0.0.1#5053
           ports:
             - name: dns-tcp
               containerPort: 53
@@ -64,7 +67,25 @@ spec:
               cpu: 100m
             limits:
               memory: 768Mi
+        # DoT sidecar: forwards Pi-hole's upstream queries encrypted over TLS.
+        # Shares the pod network, so Pi-hole reaches it at 127.0.0.1#5053.
+        - name: unbound
+          image: klutchell/unbound:latest
+          command: ["unbound", "-d", "-c", "/etc/unbound/unbound.conf"]
+          volumeMounts:
+            - name: unbound-conf
+              mountPath: /etc/unbound/unbound.conf
+              subPath: unbound.conf
+          resources:
+            requests:
+              memory: 32Mi
+              cpu: 25m
+            limits:
+              memory: 128Mi
       volumes:
         - name: pihole-etc
           persistentVolumeClaim:
             claimName: pihole-etc
+        - name: unbound-conf
+          configMap:
+            name: unbound-dot

@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unbound-dot
+  namespace: pihole
+data:
+  # unbound as a DNS-over-TLS forwarder. Pi-hole (same pod) sends queries here on
+  # 127.0.0.1#5053; unbound forwards them encrypted (TLS, port 853) to Cloudflare
+  # and Quad9. Per-upstream TLS server names (#hostname) are why we use unbound
+  # rather than CoreDNS here. No plaintext fallback — if TLS fails, resolution fails.
+  unbound.conf: |
+    server:
+        verbosity: 1
+        interface: 127.0.0.1
+        port: 5053
+        do-ip4: yes
+        do-ip6: no
+        do-udp: yes
+        do-tcp: yes
+        access-control: 127.0.0.0/8 allow
+        hide-identity: yes
+        hide-version: yes
+        prefetch: yes
+        num-threads: 1
+        tls-cert-bundle: "/etc/ssl/certs/ca-certificates.crt"
+    forward-zone:
+        name: "."
+        forward-tls-upstream: yes
+        forward-addr: 1.1.1.1@853#cloudflare-dns.com
+        forward-addr: 1.0.0.1@853#cloudflare-dns.com
+        forward-addr: 9.9.9.9@853#dns.quad9.net
+        forward-addr: 149.112.112.112@853#dns.quad9.net
