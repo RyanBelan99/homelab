@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: pihole
-          image: docker.io/pihole/pihole:latest
+          image: docker.io/pihole/pihole:latest@sha256:f7d1be836e3bc608b56d82fc9904f5a831cdfbc0dc9c6d58f94e4c985c70038b
           envFrom:
             - secretRef:
                 name: pihole-secrets
@@ -70,7 +70,7 @@ spec:
         # DoT sidecar: forwards Pi-hole's upstream queries encrypted over TLS.
         # Shares the pod network, so Pi-hole reaches it at 127.0.0.1#5053.
         - name: unbound
-          image: klutchell/unbound:latest
+          image: klutchell/unbound:latest@sha256:5020cfe1218aeda38777f88279220162e602c3a44efc684550dbf46137106a16
           command: ["unbound", "-d", "-c", "/etc/unbound/unbound.conf"]
           volumeMounts:
             - name: unbound-conf

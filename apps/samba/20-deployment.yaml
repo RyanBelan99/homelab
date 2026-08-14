@@ -17,22 +17,20 @@ spec:
       labels:
         app: samba
     spec:
+      # Bind directly to the host's eth0 (192.168.0.34) instead of the pod overlay network,
+      # so Avahi/WSDD2/NetBIOS broadcasts can actually reach LAN clients and SMB traffic
+      # skips the ServiceLB/DNAT path.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: samba
-          image: ghcr.io/servercontainers/samba:latest
+          image: ghcr.io/servercontainers/samba:latest@sha256:57859789bd3425e6e929269fa13b16251cc8b8f939e4362ed7100aaf41a17122
           envFrom:
             - secretRef:
                 name: samba-config
           env:
             - name: TZ
               value: America/Los_Angeles
-            # SMB only — skip NetBIOS/avahi/wsdd2 discovery daemons inside the pod
-            - name: AVAHI_DISABLE
-              value: "1"
-            - name: WSDD2_DISABLE
-              value: "1"
-            - name: NETBIOS_DISABLE
-              value: "1"
           ports:
             - name: smb
               containerPort: 445
