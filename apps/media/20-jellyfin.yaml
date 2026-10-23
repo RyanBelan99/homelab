@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jellyfin
+  namespace: media
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: jellyfin
+  template:
+    metadata:
+      labels:
+        app: jellyfin
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: centralpi
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: jellyfin
+          image: jellyfin/jellyfin:latest
+          env:
+            - name: TZ
+              value: America/Los_Angeles
+          ports:
+            - containerPort: 8096
+          resources:
+            requests:
+              cpu: 300m
+              memory: 384Mi
+            limits:
+              memory: 1536Mi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: cache
+              mountPath: /cache
+            - name: media
+              mountPath: /data/media
+              readOnly: true
+      volumes:
+        - name: config
+          hostPath:
+            path: /mnt/config/jellyfin/config
+            type: Directory
+        - name: cache
+          hostPath:
+            path: /mnt/config/jellyfin/cache
+            type: Directory
+        - name: media
+          hostPath:
+            path: /mnt/data/media
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jellyfin
+  namespace: media
+spec:
+  type: LoadBalancer
+  selector:
+    app: jellyfin
+  ports:
+    - name: web
+      port: 8096
+      targetPort: 8096
