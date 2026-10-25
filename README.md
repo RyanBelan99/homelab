@@ -8,29 +8,38 @@ own container. The cluster serves the LAN on the Pi's IP, `192.168.0.34`.
 |---------|-----------|-------|------------|
 | Pi-hole | `pihole`  | 53 (DNS), 80/443 (admin UI) | Network-wide DNS + ad blocking |
 | Samba   | `nas`     | 445 (SMB) | `NetworkStorage` file share (`~/shared/nas`) |
+| Jellyfin | `media`  | 8096 | Media server |
+| qBittorrent + gluetun | `media` | 8080 (web UI) | Download client, all traffic through a VPN sidecar |
+| Radarr / Sonarr | `media` | 7878 / 8989 | Movie / TV automation |
+| Prowlarr | `media`  | 9696 | Indexer manager for Radarr and Sonarr |
 
 ## Layout
 
 ```
-apps/        Kubernetes manifests, one folder per service
-  pihole/    namespace, secret, PVC, deployment, service
-  samba/     namespace, secret, deployment, service
-scripts/     the sudo-required setup/cutover scripts (01–04), run in order
-docs/        host-config.md — the non-Kubernetes host settings (cgroups, ufw, DNS)
-secrets/     real credentials — GITIGNORED, never committed
-backups/     Pi-hole Teleporter exports — GITIGNORED
+apps/          Kubernetes manifests, one folder per service
+  pihole/      namespace, secret, PVC, deployment, service
+  nas/samba/   namespace, secret, deployment
+  media/       namespace, VPN secret, one file per app (deployment + service)
+scripts/       the sudo-required setup/cutover scripts (01-04), run in order
+docs/          host-config.md - the non-Kubernetes host settings (cgroups, ufw, DNS)
+secrets/       real credentials - GITIGNORED, never committed
+backups/       Pi-hole Teleporter exports - GITIGNORED
 ```
 
-## Secrets — read this before cloning elsewhere
+The media apps keep their state in hostPath folders on the Pi, not in git:
+`/mnt/config/<app>` (settings and databases) and `/mnt/data` (`torrents/` and
+`media/` on one filesystem, so Radarr and Sonarr can hardlink).
+
+## Secrets - read this before cloning elsewhere
 
 Real passwords are **not** in git. Each service has a committed
 `10-secret.yaml.example` (placeholder values) and a gitignored `10-secret.yaml`
-(the real one, present only on this Pi). On a fresh clone you must recreate the
-real secrets:
+(the real one). On a fresh clone you must recreate the real secrets:
 
 ```bash
-cp apps/pihole/10-secret.yaml.example apps/pihole/10-secret.yaml   # then edit in a real password
-cp apps/samba/10-secret.yaml.example  apps/samba/10-secret.yaml    # then edit in a real password
+cp apps/pihole/10-secret.yaml.example    apps/pihole/10-secret.yaml      # then edit in a real password
+cp apps/nas/samba/10-secret.yaml.example apps/nas/samba/10-secret.yaml   # then edit in a real password
+cp apps/media/10-secret.yaml.example     apps/media/10-secret.yaml       # then fill in the VPN's WireGuard values
 ```
 
 `kubectl apply -f apps/<svc>/` applies `10-secret.yaml` and ignores the
@@ -42,11 +51,12 @@ The current live passwords are in `secrets/CREDENTIALS.txt` (also gitignored).
 ## Everyday commands
 
 ```bash
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml   # once per shell (or add to ~/.bashrc)
+export KUBECONFIG=~/.kube/pi-config            # on the Mac (on the Pi: /etc/rancher/k3s/k3s.yaml)
 
 kubectl get pods -A                            # everything running
 kubectl apply -f apps/pihole/                  # apply Pi-hole changes
-kubectl apply -f apps/samba/                   # apply Samba changes
+kubectl apply -f apps/nas/samba/               # apply Samba changes
+kubectl apply -f apps/media/                   # apply the media stack
 kubectl -n pihole rollout restart deploy/pihole
 ```
 
@@ -58,11 +68,12 @@ The pre-migration native services are still installed but disabled, as a fallbac
 # Pi-hole
 kubectl delete -f apps/pihole/ && sudo systemctl start pihole-FTL
 # Samba
-kubectl delete -f apps/samba/ && sudo systemctl enable --now smbd nmbd winbind
+kubectl delete -f apps/nas/samba/ && sudo systemctl enable --now smbd nmbd winbind
 ```
 
 ## Rebuilding from scratch
 
 See `docs/host-config.md` for the host-level prerequisites, then run
 `scripts/01-prep.sh` → reboot → `02-install-k3s.sh`, recreate the secrets (above),
-and `kubectl apply -f apps/pihole/ -f apps/samba/`.
+create the `/mnt/data` and `/mnt/config` folders (owned by uid 1000), and
+`kubectl apply -f apps/pihole/ -f apps/nas/samba/ -f apps/media/`.
