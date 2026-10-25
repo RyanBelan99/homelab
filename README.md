@@ -11,7 +11,7 @@ own container. The cluster serves the LAN on the Pi's IP, `192.168.0.34`.
 | Jellyfin | `media`  | 8096 | Media server |
 | qBittorrent + gluetun | `media` | 8080 (web UI) | Download client, all traffic through a VPN sidecar |
 | Radarr / Sonarr | `media` | 7878 / 8989 | Movie / TV automation |
-| Prowlarr | `media`  | 9696 | Indexer manager for Radarr and Sonarr |
+| Prowlarr + gluetun | `media` | 9696 | Indexer manager for Radarr and Sonarr, searches through its own VPN sidecar |
 
 ## Layout
 
@@ -39,7 +39,7 @@ Real passwords are **not** in git. Each service has a committed
 ```bash
 cp apps/pihole/10-secret.yaml.example    apps/pihole/10-secret.yaml      # then edit in a real password
 cp apps/nas/samba/10-secret.yaml.example apps/nas/samba/10-secret.yaml   # then edit in a real password
-cp apps/media/10-secret.yaml.example     apps/media/10-secret.yaml       # then fill in the VPN's WireGuard values
+cp apps/media/10-secret.yaml.example     apps/media/10-secret.yaml       # then fill in two WireGuard configs (qBittorrent, Prowlarr)
 ```
 
 `kubectl apply -f apps/<svc>/` applies `10-secret.yaml` and ignores the
