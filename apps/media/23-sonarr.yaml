@@ -57,6 +57,8 @@ metadata:
   namespace: media
 spec:
   type: LoadBalancer
+  # Pinned: Prowlarr reaches Sonarr by this IP (hostAliases in 24-prowlarr.yaml).
+  clusterIP: 10.43.39.177
   selector:
     app: sonarr
   ports:

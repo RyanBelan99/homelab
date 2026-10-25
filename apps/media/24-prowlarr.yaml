@@ -17,6 +17,63 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: centralpi
+      # Indexer searches and .torrent grabs leave through gluetun, like qBittorrent.
+      # DNS goes to gluetun (encrypted, through the tunnel). gluetun can't resolve
+      # cluster names, so Radarr and Sonarr are pinned in /etc/hosts; their Services
+      # pin the same clusterIPs in 22-radarr.yaml and 23-sonarr.yaml.
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+          - 127.0.0.1
+      hostAliases:
+        - ip: 10.43.23.177
+          hostnames: ["radarr", "radarr.media.svc.cluster.local"]
+        - ip: 10.43.39.177
+          hostnames: ["sonarr", "sonarr.media.svc.cluster.local"]
+      initContainers:
+        # Native sidecar: starts first, Prowlarr waits for the tunnel. Separate
+        # WireGuard config from qBittorrent's (one Proton device per tunnel).
+        - name: gluetun
+          image: qmcgaw/gluetun:latest
+          restartPolicy: Always
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]
+          envFrom:
+            - secretRef:
+                name: vpn-credentials-prowlarr
+          env:
+            - name: TZ
+              value: America/Los_Angeles
+            - name: VPN_TYPE
+              value: wireguard
+            # Web UI from the LAN, and Radarr/Sonarr calling Prowlarr's API.
+            - name: FIREWALL_INPUT_PORTS
+              value: "9696"
+            # Replies to the LAN, plus Prowlarr syncing indexers to Radarr/Sonarr.
+            - name: FIREWALL_OUTBOUND_SUBNETS
+              value: "192.168.0.0/24,10.42.0.0/16,10.43.0.0/16"
+          startupProbe:
+            exec:
+              command: ["/gluetun-entrypoint", "healthcheck"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            exec:
+              command: ["/gluetun-entrypoint", "healthcheck"]
+            periodSeconds: 60
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: tun
+              mountPath: /dev/net/tun
       containers:
         - name: prowlarr
           image: lscr.io/linuxserver/prowlarr:latest
@@ -43,6 +100,10 @@ spec:
           hostPath:
             path: /mnt/config/prowlarr
             type: Directory
+        - name: tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice
 ---
 apiVersion: v1
 kind: Service

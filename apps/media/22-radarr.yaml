@@ -57,6 +57,8 @@ metadata:
   namespace: media
 spec:
   type: LoadBalancer
+  # Pinned: Prowlarr reaches Radarr by this IP (hostAliases in 24-prowlarr.yaml).
+  clusterIP: 10.43.23.177
   selector:
     app: radarr
   ports:
