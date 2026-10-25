@@ -36,7 +36,7 @@ spec:
               add: ["NET_ADMIN"]
           envFrom:
             - secretRef:
-                name: vpn-credentials
+                name: vpn-credentials-qbittorrent
           env:
             - name: TZ
               value: America/Los_Angeles
