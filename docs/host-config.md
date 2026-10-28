@@ -25,8 +25,12 @@ sudo ufw allow from 10.43.0.0/16                                 # service netwo
 sudo ufw allow in on cni0                                        # pod bridge
 ```
 
-Pre-existing rules (from before k3s) still allow the LAN and VPN subnets and DNS
-on port 53.
+The home LAN (`192.168.0.0/24`) and the router's WireGuard VPN (`10.5.5.0/24`)
+may only reach SSH (22), Samba (445), the k3s API (6443), and, as a safety net,
+DNS (53), Traefik (80) and Jellyfin (8096). Those last three are Kubernetes
+services whose traffic is forwarded to pods rather than delivered to the host.
+Kubelet (10250), flannel VXLAN (8472/udp) and the rest stay closed to the LAN.
+Set by `scripts/06-harden-host.sh` (section 7).
 
 ## 3. Host DNS pin — NetworkManager
 
@@ -45,12 +49,17 @@ router's DHCP — only the Pi itself bypasses it.
 
 ## 4. kubectl access
 
-k3s writes its admin kubeconfig to `/etc/rancher/k3s/k3s.yaml` (installed with
-`--write-kubeconfig-mode 644` so your user can read it). To use `kubectl`:
+k3s writes its admin kubeconfig to `/etc/rancher/k3s/k3s.yaml`, root-only
+(`--write-kubeconfig-mode 600`): it is cluster-admin. Your user gets its own copy:
 
 ```bash
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml   # add to ~/.bashrc to make permanent
+install -d -m 700 ~/.kube
+sudo install -m 600 -o "$USER" -g "$USER" /etc/rancher/k3s/k3s.yaml ~/.kube/config
+export KUBECONFIG=$HOME/.kube/config   # in ~/.bashrc
 ```
+
+Re-copy it if k3s ever rotates its certificates (kubectl then reports an
+expired or unknown certificate).
 
 ## 5. k3s install flags
 
@@ -59,7 +68,7 @@ Installed with the bundled Traefik disabled. Traefik is instead installed from
 version and settings live in git:
 
 ```bash
-curl -sfL https://get.k3s.io | sh -s - --disable traefik --write-kubeconfig-mode 644
+curl -sfL https://get.k3s.io | sh -s - --disable traefik --write-kubeconfig-mode 600
 ```
 
 ## 6. Tailscale - remote access (`scripts/05-tailscale.sh`)
@@ -89,3 +98,22 @@ console). Settings that only exist in the admin console:
   with exit node** on, so every tailnet device uses Pi-hole. Use the LAN IP, not
   the node's 100.x IP: the 100.x path goes through the svclb proxy pod, which
   hides the client, while 192.168.0.34 hits kube-proxy directly.
+
+## 7. Host hardening (`scripts/06-harden-host.sh`)
+
+From the 2026-10-28 security audit. The script runs as a background systemd job
+(`harden-host`) so a dropped SSH session cannot interrupt the upgrades.
+
+- **Docker removed**: it was unused, and its group was root-equivalent. k3s runs
+  its own containerd under `/var/lib/rancher/k3s`.
+- **No desktop**: boots to `multi-user.target` with no console autologin (the
+  `getty@tty1` autologin drop-in is removed); lightdm, Bluetooth, avahi (mDNS)
+  and CUPS are disabled, CUPS masked. Raspberry Pi Connect and wayvnc (remote
+  shell and screen sharing through Raspberry Pi's cloud) are purged. `centralpi.local` no longer resolves; use
+  `192.168.0.34` or `centralpi` over Tailscale.
+- **SSH**: `/etc/ssh/sshd_config.d/20-hardening.conf` sets `X11Forwarding no` and
+  `PermitRootLogin no` (password login was already off in `10-disable-password-auth.conf`).
+- **ufw**: LAN and router VPN limited to the ports in section 2.
+- **kubeconfig**: root-only, per-user copy (section 4).
+- **Updates**: `apt full-upgrade`. Unattended upgrades only install Debian security
+  updates, so run a full upgrade (and reboot) every month or so.

@@ -31,7 +31,7 @@ apps/          Kubernetes manifests, one folder per service
   media/       namespace, VPN secret, one file per app (deployment + service), ingresses
   dashboard/   Homepage, ingress
   vpn-exit/    proton-exit: Tailscale exit node behind a gluetun ProtonVPN tunnel
-scripts/       the sudo-required setup/cutover scripts (01-05), run in order
+scripts/       the sudo-required setup/cutover scripts (01-06), run in order
 docs/          host-config.md - the non-Kubernetes host settings (cgroups, ufw, DNS, Tailscale)
                tailscale-policy.hujson - tailnet access rules (pasted into the admin console)
 secrets/       real credentials - GITIGNORED, never committed
@@ -76,7 +76,7 @@ The current live passwords are in `secrets/CREDENTIALS.txt` (also gitignored).
 ## Everyday commands
 
 ```bash
-export KUBECONFIG=~/.kube/pi-config            # on the Mac (on the Pi: /etc/rancher/k3s/k3s.yaml)
+export KUBECONFIG=~/.kube/pi-config            # on the Mac (on the Pi: ~/.kube/config)
 
 kubectl get pods -A                            # everything running
 kubectl apply -f apps/pihole/                  # apply Pi-hole changes
