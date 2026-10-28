@@ -18,7 +18,7 @@ family accounts) are open on the node.
 | qBittorrent + gluetun | `media` | http://qbit.home.arpa | Download client, all traffic through a VPN sidecar |
 | Radarr / Sonarr | `media` | http://radarr.home.arpa / http://sonarr.home.arpa | Movie / TV automation |
 | Prowlarr + gluetun | `media` | http://prowlarr.home.arpa | Indexer manager for Radarr and Sonarr, searches through its own VPN sidecar |
-| Homepage / Headlamp | `dashboard` | http://home.home.arpa / http://headlamp.home.arpa | Dashboard / Kubernetes admin UI |
+| Homepage | `dashboard` | http://home.home.arpa | Dashboard |
 | proton-exit (Tailscale + gluetun) | `vpn-exit` | tailnet only | Tailscale exit node whose traffic leaves through ProtonVPN |
 
 ## Layout
@@ -29,7 +29,7 @@ apps/          Kubernetes manifests, one folder per service
   pihole/      namespace, secret, PVC, deployment, services, ingress
   nas/samba/   namespace, secret, deployment
   media/       namespace, VPN secret, one file per app (deployment + service), ingresses
-  dashboard/   Homepage + Headlamp, ingresses
+  dashboard/   Homepage, ingress
   vpn-exit/    proton-exit: Tailscale exit node behind a gluetun ProtonVPN tunnel
 scripts/       the sudo-required setup/cutover scripts (01-05), run in order
 docs/          host-config.md - the non-Kubernetes host settings (cgroups, ufw, DNS, Tailscale)
