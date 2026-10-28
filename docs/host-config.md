@@ -54,7 +54,9 @@ export KUBECONFIG=/etc/rancher/k3s/k3s.yaml   # add to ~/.bashrc to make permane
 
 ## 5. k3s install flags
 
-Installed with Traefik disabled (Pi-hole owns ports 80/443):
+Installed with the bundled Traefik disabled. Traefik is instead installed from
+`apps/traefik/` (a pinned `HelmChart` that k3s's helm-controller deploys), so its
+version and settings live in git:
 
 ```bash
 curl -sfL https://get.k3s.io | sh -s - --disable traefik --write-kubeconfig-mode 644

@@ -4,22 +4,31 @@ Source of truth for the services running on **CentralPI** (Raspberry Pi 4B), a
 single-node [k3s](https://k3s.io) Kubernetes cluster. Every service runs in its
 own container. The cluster serves the LAN on the Pi's IP, `192.168.0.34`.
 
-| Service | Namespace | Ports | What it is |
-|---------|-----------|-------|------------|
-| Pi-hole | `pihole`  | 53 (DNS), 80/443 (admin UI) | Network-wide DNS + ad blocking |
-| Samba   | `nas`     | 445 (SMB) | `NetworkStorage` file share (`~/shared/nas`) |
-| Jellyfin | `media`  | 8096 | Media server |
-| qBittorrent + gluetun | `media` | 8080 (web UI) | Download client, all traffic through a VPN sidecar |
-| Radarr / Sonarr | `media` | 7878 / 8989 | Movie / TV automation |
-| Prowlarr + gluetun | `media` | 9696 | Indexer manager for Radarr and Sonarr, searches through its own VPN sidecar |
+Web apps are reached by name through [Traefik](https://traefik.io) on port 80:
+Pi-hole answers every `*.home.arpa` name with `192.168.0.34`, and Traefik routes
+by hostname. Only DNS, SMB, Traefik and Jellyfin's direct port (for TV apps and
+family accounts) are open on the node.
+
+| Service | Namespace | Address | What it is |
+|---------|-----------|---------|------------|
+| Traefik | `traefik` | :80 | Reverse proxy for every `*.home.arpa` name |
+| Pi-hole | `pihole`  | :53 (DNS), http://pihole.home.arpa/admin/ | Network-wide DNS + ad blocking |
+| Samba   | `nas`     | :445 (SMB) | `NetworkStorage` file share (`~/shared/nas`) |
+| Jellyfin | `media`  | http://jellyfin.home.arpa, :8096 | Media server |
+| qBittorrent + gluetun | `media` | http://qbit.home.arpa | Download client, all traffic through a VPN sidecar |
+| Radarr / Sonarr | `media` | http://radarr.home.arpa / http://sonarr.home.arpa | Movie / TV automation |
+| Prowlarr + gluetun | `media` | http://prowlarr.home.arpa | Indexer manager for Radarr and Sonarr, searches through its own VPN sidecar |
+| Homepage / Headlamp | `dashboard` | http://home.home.arpa / http://headlamp.home.arpa | Dashboard / Kubernetes admin UI |
 
 ## Layout
 
 ```
 apps/          Kubernetes manifests, one folder per service
-  pihole/      namespace, secret, PVC, deployment, service
+  traefik/     namespace + pinned Traefik HelmChart (reverse proxy on :80)
+  pihole/      namespace, secret, PVC, deployment, services, ingress
   nas/samba/   namespace, secret, deployment
-  media/       namespace, VPN secret, one file per app (deployment + service)
+  media/       namespace, VPN secret, one file per app (deployment + service), ingresses
+  dashboard/   Homepage + Headlamp, ingresses
 scripts/       the sudo-required setup/cutover scripts (01-05), run in order
 docs/          host-config.md - the non-Kubernetes host settings (cgroups, ufw, DNS, Tailscale)
                tailscale-policy.hujson - tailnet access rules (pasted into the admin console)
@@ -66,6 +75,7 @@ kubectl get pods -A                            # everything running
 kubectl apply -f apps/pihole/                  # apply Pi-hole changes
 kubectl apply -f apps/nas/samba/               # apply Samba changes
 kubectl apply -f apps/media/                   # apply the media stack
+kubectl apply -f apps/traefik/                 # apply Traefik (pinned Helm chart)
 kubectl -n pihole rollout restart deploy/pihole
 ```
 
@@ -85,4 +95,4 @@ kubectl delete -f apps/nas/samba/ && sudo systemctl enable --now smbd nmbd winbi
 See `docs/host-config.md` for the host-level prerequisites, then run
 `scripts/01-prep.sh` → reboot → `02-install-k3s.sh`, recreate the secrets (above),
 create the `/mnt/data` and `/mnt/config` folders (owned by uid 1000), and
-`kubectl apply -f apps/pihole/ -f apps/nas/samba/ -f apps/media/`.
+`kubectl apply -f apps/traefik/ -f apps/pihole/ -f apps/nas/samba/ -f apps/media/ -f apps/dashboard/`.

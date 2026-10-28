@@ -125,7 +125,7 @@ metadata:
   name: qbittorrent
   namespace: media
 spec:
-  type: LoadBalancer
+  # In-cluster only: browsers reach it through Traefik (30-ingress.yaml).
   selector:
     app: qbittorrent
   ports:

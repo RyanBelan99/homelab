@@ -56,7 +56,7 @@ metadata:
   name: sonarr
   namespace: media
 spec:
-  type: LoadBalancer
+  # In-cluster only: browsers reach it through Traefik (30-ingress.yaml).
   # Pinned: Prowlarr reaches Sonarr by this IP (hostAliases in 24-prowlarr.yaml).
   clusterIP: 10.43.39.177
   selector:

@@ -35,6 +35,10 @@ spec:
             # in the web UI — this env var wins on every restart.
             - name: FTLCONF_dns_upstreams
               value: 127.0.0.1#5053
+            # Every *.home.arpa name points at Traefik on the node, which routes by
+            # hostname (apps/*/…-ingress.yaml). Works on the LAN and the tailnet.
+            - name: FTLCONF_misc_dnsmasq_lines
+              value: address=/home.arpa/192.168.0.34
           ports:
             - name: dns-tcp
               containerPort: 53

@@ -9,6 +9,8 @@ spec:
   externalTrafficPolicy: Local
   selector:
     app: pihole
+  # DNS only. Ports 80/443 on the node belong to Traefik; the admin UI is
+  # reached through it at http://pihole.home.arpa/admin/ (pihole-web below).
   ports:
     - name: dns-tcp
       port: 53
@@ -18,11 +20,17 @@ spec:
       port: 53
       targetPort: dns-udp
       protocol: UDP
+---
+# In-cluster only: the admin UI behind Traefik (40-ingress.yaml).
+apiVersion: v1
+kind: Service
+metadata:
+  name: pihole-web
+  namespace: pihole
+spec:
+  selector:
+    app: pihole
+  ports:
     - name: http
       port: 80
       targetPort: http
-      protocol: TCP
-    - name: https
-      port: 443
-      targetPort: https
-      protocol: TCP
