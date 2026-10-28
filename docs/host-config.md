@@ -72,6 +72,10 @@ per-service config. Nothing is port-forwarded on the router.
   as at home (`http://192.168.0.34:8096`).
 - **Exit node**: optional full-tunnel through home (and Pi-hole) on public wifi.
 - **`--accept-dns=false`**: keeps the host DNS pin from section 3.
+- **No Tailscale SNAT** (`--snat-subnet-routes=false`): Pi-hole and Traefik see
+  each tailnet device's real 100.x IP. Instead, a ufw NAT rule at the top of
+  `/etc/ufw/before.rules` masquerades only tailnet traffic leaving eth0 (other
+  LAN devices, the exit node), since the router has no route back to 100.64.0.0/10.
 - **ufw**: `allow in on tailscale0`, `route allow in on tailscale0 out on eth0`,
   `allow 41641/udp`.
 - **sysctl**: `/etc/sysctl.d/99-tailscale.conf` turns on IPv4/IPv6 forwarding.
@@ -81,7 +85,7 @@ per-service config. Nothing is port-forwarded on the router.
 Access rules live in `docs/tailscale-policy.hujson` (pasted into the admin
 console). Settings that only exist in the admin console:
 
-- **DNS**: nameserver = this node's Tailscale IP (`tailscale ip -4`), with
-  **Override DNS servers** on, so every tailnet device uses Pi-hole. Use the
-  100.x IP, not 192.168.0.34: through the subnet route Pi-hole would see every
-  remote device as the Pi itself.
+- **DNS**: nameserver = `192.168.0.34` with **Override DNS servers** and **Use
+  with exit node** on, so every tailnet device uses Pi-hole. Use the LAN IP, not
+  the node's 100.x IP: the 100.x path goes through the svclb proxy pod, which
+  hides the client, while 192.168.0.34 hits kube-proxy directly.

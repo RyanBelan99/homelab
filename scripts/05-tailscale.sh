@@ -28,6 +28,14 @@ echo "== 3/5 ufw rules for tailscale =="
 ufw allow in on tailscale0 comment 'tailscale: tailnet to host + k3s services'
 ufw route allow in on tailscale0 out on eth0 comment 'tailscale: subnet route + exit node'
 ufw allow 41641/udp comment 'tailscale: direct WireGuard connections'
+# Tailscale's own SNAT is off (--snat-subnet-routes=false below) so pods behind
+# kube-proxy (Pi-hole, Traefik) see each tailnet device's real 100.x IP. Traffic
+# that leaves eth0 (other LAN devices, the exit node) still needs NAT, because
+# the router has no route back to 100.64.0.0/10.
+if ! grep -q 'tailscale-masquerade' /etc/ufw/before.rules; then
+  sed -i '1i # tailscale-masquerade: tailnet traffic leaving eth0 (scripts/05-tailscale.sh)\n*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s 100.64.0.0/10 -o eth0 -j MASQUERADE\nCOMMIT\n' /etc/ufw/before.rules
+fi
+ufw reload
 ufw status numbered
 
 echo "== 4/5 UDP GRO forwarding on eth0 (subnet router throughput) =="
@@ -51,9 +59,10 @@ tailscale up ${TS_AUTHKEY:+--auth-key="$TS_AUTHKEY"} \
   --advertise-tags=tag:homelab \
   --advertise-routes="$LAN_CIDR" \
   --advertise-exit-node \
+  --snat-subnet-routes=false \
   --accept-dns=false
 tailscale status
 
 echo
 echo "== DONE. Tailscale IP: $(tailscale ip -4) =="
-echo "Next: admin console > DNS > add that IP as a nameserver + turn on Override DNS servers"
+echo "Next: admin console > DNS > nameserver 192.168.0.34 (Override DNS servers + Use with exit node)"

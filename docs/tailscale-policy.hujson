@@ -34,11 +34,12 @@
 			"dst": ["192.168.0.34"],
 			"ip":  ["tcp:8096"],
 		},
-		// Everyone on the tailnet uses Pi-hole (on the node's Tailscale IP) as DNS.
-		// Without this, family devices lose all name resolution under the DNS override.
+		// Everyone on the tailnet uses Pi-hole as DNS, at its LAN IP through the
+		// subnet route (so Pi-hole sees each device's real 100.x IP). Without
+		// this, family devices lose all name resolution under the DNS override.
 		{
 			"src": ["autogroup:member"],
-			"dst": ["tag:homelab"],
+			"dst": ["192.168.0.34"],
 			"ip":  ["tcp:53", "udp:53"],
 		},
 	],
