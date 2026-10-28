@@ -1,0 +1,45 @@
+// Tailscale access policy - source of truth for the tailnet.
+// Apply by pasting into https://login.tailscale.com/admin/acls/file and saving.
+// Family emails are added in the admin console, not here (keeps them out of git).
+{
+	"groups": {
+		// Jellyfin-only viewers. Fill in on the admin console.
+		"group:family": [],
+	},
+
+	"tagOwners": {
+		// CentralPI now, the mini PC later. Tagged nodes never hit key expiry.
+		"tag:homelab": ["autogroup:admin"],
+	},
+
+	// Any tag:homelab node can advertise the LAN and act as an exit node without
+	// a manual approval click. A second node advertising the same route becomes
+	// an automatic failover for it.
+	"autoApprovers": {
+		"routes":   {"192.168.0.0/24": ["tag:homelab"]},
+		"exitNode": ["tag:homelab"],
+	},
+
+	"grants": [
+		// Admins (you): every device, the whole LAN, and the exit node.
+		{
+			"src": ["autogroup:admin"],
+			"dst": ["*", "autogroup:internet"],
+			"ip":  ["*"],
+		},
+		// Family: Jellyfin only. Admin UIs (*arr, qBittorrent, Headlamp, Pi-hole
+		// admin) stay unreachable even though they share the same LAN IP.
+		{
+			"src": ["group:family"],
+			"dst": ["192.168.0.34"],
+			"ip":  ["tcp:8096"],
+		},
+		// Everyone on the tailnet uses Pi-hole (on the node's Tailscale IP) as DNS.
+		// Without this, family devices lose all name resolution under the DNS override.
+		{
+			"src": ["autogroup:member"],
+			"dst": ["tag:homelab"],
+			"ip":  ["tcp:53", "udp:53"],
+		},
+	],
+}

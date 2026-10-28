@@ -20,8 +20,9 @@ apps/          Kubernetes manifests, one folder per service
   pihole/      namespace, secret, PVC, deployment, service
   nas/samba/   namespace, secret, deployment
   media/       namespace, VPN secret, one file per app (deployment + service)
-scripts/       the sudo-required setup/cutover scripts (01-04), run in order
-docs/          host-config.md - the non-Kubernetes host settings (cgroups, ufw, DNS)
+scripts/       the sudo-required setup/cutover scripts (01-05), run in order
+docs/          host-config.md - the non-Kubernetes host settings (cgroups, ufw, DNS, Tailscale)
+               tailscale-policy.hujson - tailnet access rules (pasted into the admin console)
 secrets/       real credentials - GITIGNORED, never committed
 backups/       Pi-hole Teleporter exports - GITIGNORED
 ```
@@ -29,6 +30,14 @@ backups/       Pi-hole Teleporter exports - GITIGNORED
 The media apps keep their state in hostPath folders on the Pi, not in git:
 `/mnt/config/<app>` (settings and databases) and `/mnt/data` (`torrents/` and
 `media/` on one filesystem, so Radarr and Sonarr can hardlink).
+
+## Remote access
+
+[Tailscale](https://tailscale.com) on the host (not in k3s) makes CentralPI a
+subnet router for `192.168.0.0/24` and an exit node. Away from home, tailnet
+devices use the same LAN URLs and Pi-hole as their DNS. No router ports are
+forwarded. Family accounts can reach Jellyfin (`:8096`) only. Setup:
+`scripts/05-tailscale.sh` and `docs/host-config.md` section 6.
 
 ## Secrets - read this before cloning elsewhere
 

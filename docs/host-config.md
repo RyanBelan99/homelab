@@ -59,3 +59,27 @@ Installed with Traefik disabled (Pi-hole owns ports 80/443):
 ```bash
 curl -sfL https://get.k3s.io | sh -s - --disable traefik --write-kubeconfig-mode 644
 ```
+
+## 6. Tailscale - remote access (`scripts/05-tailscale.sh`)
+
+Tailscale runs on the host, not in k3s. Every service is already a ServiceLB
+port on the node, so the host's tailnet IP reaches all of them with no
+per-service config. Nothing is port-forwarded on the router.
+
+- **Subnet router** for `192.168.0.0/24`: remote devices use the same LAN URLs
+  as at home (`http://192.168.0.34:8096`).
+- **Exit node**: optional full-tunnel through home (and Pi-hole) on public wifi.
+- **`--accept-dns=false`**: keeps the host DNS pin from section 3.
+- **ufw**: `allow in on tailscale0`, `route allow in on tailscale0 out on eth0`,
+  `allow 41641/udp`.
+- **sysctl**: `/etc/sysctl.d/99-tailscale.conf` turns on IPv4/IPv6 forwarding.
+- **UDP GRO**: `/etc/NetworkManager/dispatcher.d/50-tailscale-gro` re-applies
+  `ethtool -K eth0 rx-udp-gro-forwarding on rx-gro-list off` whenever eth0 comes up.
+
+Access rules live in `docs/tailscale-policy.hujson` (pasted into the admin
+console). Settings that only exist in the admin console:
+
+- **DNS**: nameserver = this node's Tailscale IP (`tailscale ip -4`), with
+  **Override DNS servers** on, so every tailnet device uses Pi-hole. Use the
+  100.x IP, not 192.168.0.34: through the subnet route Pi-hole would see every
+  remote device as the Pi itself.
