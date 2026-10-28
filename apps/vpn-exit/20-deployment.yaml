@@ -49,6 +49,12 @@ spec:
               value: America/Los_Angeles
             - name: VPN_TYPE
               value: wireguard
+            # Tailscale's own WireGuard packets ride inside this tunnel and are up
+            # to 1340 bytes (1280 + 60). gluetun's default 1320 drops or fragments
+            # every full-size one, which throttles the exit node to a few KB/s.
+            # 1380 fits them and still leaves room under the pod's 1450 MTU.
+            - name: WIREGUARD_MTU
+              value: "1380"
           startupProbe:
             exec:
               command: ["/gluetun-entrypoint", "healthcheck"]
