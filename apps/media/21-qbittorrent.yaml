@@ -31,6 +31,18 @@ spec:
         - name: gluetun
           image: qmcgaw/gluetun:latest
           restartPolicy: Always
+          # A restarted container keeps the pod's network namespace, including
+          # the policy-routing rules of a run that died abruptly (probe kill,
+          # power loss). gluetun then fails forever with "adding IPv6 rule:
+          # file exists". Clear them before every start (the gluetun wiki's
+          # Kubernetes fix, run before the entrypoint instead of racing it).
+          command:
+            - /bin/sh
+            - -c
+            - |
+              while ip rule del table 51820 2>/dev/null; do :; done
+              while ip -6 rule del table 51820 2>/dev/null; do :; done
+              exec /gluetun-entrypoint
           securityContext:
             capabilities:
               add: ["NET_ADMIN"]
