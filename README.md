@@ -19,6 +19,7 @@ family accounts) are open on the node.
 | Radarr / Sonarr | `media` | http://radarr.home.arpa / http://sonarr.home.arpa | Movie / TV automation |
 | Prowlarr + gluetun | `media` | http://prowlarr.home.arpa | Indexer manager for Radarr and Sonarr, searches through its own VPN sidecar |
 | Homepage / Headlamp | `dashboard` | http://home.home.arpa / http://headlamp.home.arpa | Dashboard / Kubernetes admin UI |
+| proton-exit (Tailscale + gluetun) | `vpn-exit` | tailnet only | Tailscale exit node whose traffic leaves through ProtonVPN |
 
 ## Layout
 
@@ -29,6 +30,7 @@ apps/          Kubernetes manifests, one folder per service
   nas/samba/   namespace, secret, deployment
   media/       namespace, VPN secret, one file per app (deployment + service), ingresses
   dashboard/   Homepage + Headlamp, ingresses
+  vpn-exit/    proton-exit: Tailscale exit node behind a gluetun ProtonVPN tunnel
 scripts/       the sudo-required setup/cutover scripts (01-05), run in order
 docs/          host-config.md - the non-Kubernetes host settings (cgroups, ufw, DNS, Tailscale)
                tailscale-policy.hujson - tailnet access rules (pasted into the admin console)
@@ -48,6 +50,10 @@ devices use the same LAN URLs and Pi-hole as their DNS. No router ports are
 forwarded. Family accounts can reach Jellyfin (`:8096`) only. Setup:
 `scripts/05-tailscale.sh` and `docs/host-config.md` section 6.
 
+Two exit nodes, picked per device in the Tailscale app: `centralpi` (websites
+see the home IP) and `proton-exit` (`apps/vpn-exit/`, websites see a ProtonVPN
+IP, with a kill switch if the tunnel drops).
+
 ## Secrets - read this before cloning elsewhere
 
 Real passwords are **not** in git. Each service has a committed
@@ -58,6 +64,7 @@ Real passwords are **not** in git. Each service has a committed
 cp apps/pihole/10-secret.yaml.example    apps/pihole/10-secret.yaml      # then edit in a real password
 cp apps/nas/samba/10-secret.yaml.example apps/nas/samba/10-secret.yaml   # then edit in a real password
 cp apps/media/10-secret.yaml.example     apps/media/10-secret.yaml       # then fill in two WireGuard configs (qBittorrent, Prowlarr)
+cp apps/vpn-exit/10-secret.yaml.example  apps/vpn-exit/10-secret.yaml    # then fill in a third WireGuard config + a Tailscale auth key
 ```
 
 `kubectl apply -f apps/<svc>/` applies `10-secret.yaml` and ignores the
@@ -76,6 +83,7 @@ kubectl apply -f apps/pihole/                  # apply Pi-hole changes
 kubectl apply -f apps/nas/samba/               # apply Samba changes
 kubectl apply -f apps/media/                   # apply the media stack
 kubectl apply -f apps/traefik/                 # apply Traefik (pinned Helm chart)
+kubectl apply -f apps/vpn-exit/                # apply the proton-exit exit node
 kubectl -n pihole rollout restart deploy/pihole
 ```
 
@@ -95,4 +103,4 @@ kubectl delete -f apps/nas/samba/ && sudo systemctl enable --now smbd nmbd winbi
 See `docs/host-config.md` for the host-level prerequisites, then run
 `scripts/01-prep.sh` → reboot → `02-install-k3s.sh`, recreate the secrets (above),
 create the `/mnt/data` and `/mnt/config` folders (owned by uid 1000), and
-`kubectl apply -f apps/traefik/ -f apps/pihole/ -f apps/nas/samba/ -f apps/media/ -f apps/dashboard/`.
+`kubectl apply -f apps/traefik/ -f apps/pihole/ -f apps/nas/samba/ -f apps/media/ -f apps/dashboard/ -f apps/vpn-exit/`.

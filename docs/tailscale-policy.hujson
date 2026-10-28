@@ -10,6 +10,9 @@
 	"tagOwners": {
 		// CentralPI now, the mini PC later. Tagged nodes never hit key expiry.
 		"tag:homelab": ["autogroup:admin"],
+		// proton-exit: exit node whose traffic leaves through ProtonVPN
+		// (apps/vpn-exit/). Admins can use it; family has no internet grant.
+		"tag:exit-proton": ["autogroup:admin"],
 	},
 
 	// Any tag:homelab node can advertise the LAN and act as an exit node without
@@ -17,7 +20,7 @@
 	// an automatic failover for it.
 	"autoApprovers": {
 		"routes":   {"192.168.0.0/24": ["tag:homelab"]},
-		"exitNode": ["tag:homelab"],
+		"exitNode": ["tag:homelab", "tag:exit-proton"],
 	},
 
 	"grants": [
