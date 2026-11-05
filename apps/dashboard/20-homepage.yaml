@@ -1,0 +1,302 @@
+# Homepage: the LAN portal. One tile per service with live pod status, CPU and
+# memory (from metrics-server), plus per-app widgets that call each app's API.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: homepage
+  namespace: dashboard
+---
+# Read-only view of the cluster: pods and nodes for the tiles, metrics for the numbers.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homepage
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, pods, nodes]
+    verbs: [get, list]
+  - apiGroups: [metrics.k8s.io]
+    resources: [nodes, pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homepage
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homepage
+subjects:
+  - kind: ServiceAccount
+    name: homepage
+    namespace: dashboard
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: homepage
+  namespace: dashboard
+data:
+  # Ingress discovery is off: every service is listed by hand in services.yaml so
+  # each tile keeps its widget, icon and description.
+  kubernetes.yaml: |
+    mode: cluster
+    ingress: false
+    traefik: false
+    gateway: false
+  settings.yaml: |
+    title: CentralPI
+    theme: dark
+    color: slate
+    headerStyle: clean
+    statusStyle: dot
+    hideVersion: true
+    # Live CPU and memory of each tile's pods, from metrics-server.
+    showStats: true
+    layout:
+      Infrastructure:
+        style: row
+        columns: 3
+      Cluster:
+        style: row
+        columns: 4
+      Media:
+        style: row
+        columns: 3
+      Automation:
+        style: row
+        columns: 4
+  widgets.yaml: |
+    - kubernetes:
+        cluster:
+          show: true
+          cpu: true
+          memory: true
+          showLabel: true
+          label: cluster
+        nodes:
+          show: true
+          cpu: true
+          memory: true
+          showLabel: true
+    - datetime:
+        text_size: md
+        format:
+          dateStyle: medium
+          timeStyle: short
+  # href is what the browser opens: the app's Tailscale Service, the one way in from
+  # anywhere. widget.url is the in-cluster address Homepage calls.
+  services.yaml: |
+    - Infrastructure:
+        - Pi-hole:
+            icon: pi-hole.svg
+            href: https://pihole.{{HOMEPAGE_VAR_TAILNET}}/admin/
+            description: DNS + ad blocking
+            namespace: pihole
+            app: pihole
+            podSelector: app=pihole
+            widget:
+              type: pihole
+              version: 6
+              url: http://pihole-web.pihole.svc.cluster.local
+              key: "{{HOMEPAGE_VAR_PIHOLE_KEY}}"
+        - Samba:
+            icon: mdi-folder-network
+            description: NetworkStorage share (smb://192.168.0.34)
+            namespace: nas
+            app: samba
+            podSelector: app=samba
+    # The pods that keep the cluster itself running. No links: they have no UI.
+    - Cluster:
+        - Traefik:
+            icon: traefik.svg
+            description: Front door on :80 (centralpi)
+            namespace: traefik
+            app: traefik
+            podSelector: app.kubernetes.io/name=traefik
+        - CoreDNS:
+            icon: mdi-dns
+            description: Cluster DNS (*.svc.cluster.local)
+            namespace: kube-system
+            app: coredns
+            podSelector: k8s-app=kube-dns
+        - proton-exit:
+            icon: proton-vpn.svg
+            description: Tailscale exit node via ProtonVPN
+            namespace: vpn-exit
+            app: proton-exit
+            podSelector: app=proton-exit
+        - metrics-server:
+            icon: mdi-chart-line
+            description: Feeds the CPU and memory numbers
+            namespace: kube-system
+            app: metrics-server
+            podSelector: k8s-app=metrics-server
+    - Media:
+        - Jellyfin:
+            icon: jellyfin.svg
+            href: https://jellyfin.{{HOMEPAGE_VAR_TAILNET}}/
+            description: Media server
+            namespace: media
+            app: jellyfin
+            podSelector: app=jellyfin
+            widget:
+              type: jellyfin
+              url: http://jellyfin.media.svc.cluster.local:8096
+              key: "{{HOMEPAGE_VAR_JELLYFIN_KEY}}"
+              # Jellyfin 10.12+ dropped the /emby routes that version 1 calls.
+              version: 2
+              fields: [movies, series, episodes]
+              enableBlocks: true
+              enableNowPlaying: true
+              expandOneStreamToTwoRows: false
+        - Seerr:
+            icon: seerr.svg
+            href: https://seerr.{{HOMEPAGE_VAR_TAILNET}}/
+            description: Request movies and shows
+            namespace: media
+            app: seerr
+            podSelector: app=seerr
+    - Automation:
+        - Radarr:
+            icon: radarr.svg
+            href: https://radarr.{{HOMEPAGE_VAR_TAILNET}}/
+            description: Movies
+            namespace: media
+            app: radarr
+            podSelector: app=radarr
+            widget:
+              type: radarr
+              url: http://radarr.media.svc.cluster.local:7878
+              key: "{{HOMEPAGE_VAR_RADARR_KEY}}"
+              fields: [wanted, queued, movies]
+        - Sonarr:
+            icon: sonarr.svg
+            href: https://sonarr.{{HOMEPAGE_VAR_TAILNET}}/
+            description: TV
+            namespace: media
+            app: sonarr
+            podSelector: app=sonarr
+            widget:
+              type: sonarr
+              url: http://sonarr.media.svc.cluster.local:8989
+              key: "{{HOMEPAGE_VAR_SONARR_KEY}}"
+        - Prowlarr:
+            icon: prowlarr.svg
+            href: https://prowlarr.{{HOMEPAGE_VAR_TAILNET}}/
+            description: Indexers (via VPN)
+            namespace: media
+            app: prowlarr
+            podSelector: app=prowlarr
+            widget:
+              type: prowlarr
+              url: http://prowlarr.media.svc.cluster.local:9696
+              key: "{{HOMEPAGE_VAR_PROWLARR_KEY}}"
+              fields: [numberOfGrabs, numberOfQueries, numberOfFailGrabs]
+        - qBittorrent:
+            icon: qbittorrent.svg
+            href: https://qbit.{{HOMEPAGE_VAR_TAILNET}}/
+            description: Downloads (via VPN)
+            namespace: media
+            app: qbittorrent
+            podSelector: app=qbittorrent
+  bookmarks.yaml: ""
+  docker.yaml: ""
+  custom.css: ""
+  custom.js: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homepage
+  namespace: dashboard
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: homepage
+  template:
+    metadata:
+      labels:
+        app: homepage
+    spec:
+      serviceAccountName: homepage
+      automountServiceAccountToken: true
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+      # Homepage writes default copies of any config file it expects but cannot find
+      # (the list grows between releases), so /app/config must be writable. Seed an
+      # emptyDir from the ConfigMap; a ConfigMap change applies on the next restart.
+      initContainers:
+        - name: seed-config
+          image: ghcr.io/gethomepage/homepage:latest
+          command: ["sh", "-c", "cp -L /config-src/* /app/config/"]
+          volumeMounts:
+            - name: config-src
+              mountPath: /config-src
+            - name: config
+              mountPath: /app/config
+      containers:
+        - name: homepage
+          image: ghcr.io/gethomepage/homepage:latest
+          env:
+            # Homepage rejects requests whose Host header is not listed here. The pod
+            # IP is for the liveness probe, which calls the pod directly.
+            - name: MY_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # Listed here, not only via envFrom, so $(TAILNET) below can expand it.
+            - name: TAILNET
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-widgets
+                  key: HOMEPAGE_VAR_TAILNET
+            - name: HOMEPAGE_ALLOWED_HOSTS
+              value: "$(MY_POD_IP):3000,home.home.arpa,home.$(TAILNET)"
+          envFrom:
+            - secretRef:
+                name: homepage-widgets
+          ports:
+            - name: http
+              containerPort: 3000
+          livenessProbe:
+            httpGet:
+              path: /api/healthcheck
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 60
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 384Mi
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+      volumes:
+        - name: config-src
+          configMap:
+            name: homepage
+        - name: config
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: homepage
+  namespace: dashboard
+spec:
+  # In-cluster only: browsers reach it through Traefik (40-ingress.yaml).
+  selector:
+    app: homepage
+  ports:
+    - name: web
+      port: 3000
+      targetPort: 3000
