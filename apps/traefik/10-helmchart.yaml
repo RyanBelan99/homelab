@@ -25,6 +25,10 @@ spec:
         type: LoadBalancer
         # Keep real LAN client IPs in Traefik's view instead of the svclb pod's.
         externalTrafficPolicy: Local
+    # Stays on the Pi, the cluster's front door: externalTrafficPolicy: Local
+    # only answers on the node running Traefik, and only the Pi runs ServiceLB.
+    nodeSelector:
+      kubernetes.io/hostname: centralpi
     ingressClass:
       enabled: true
       isDefaultClass: true

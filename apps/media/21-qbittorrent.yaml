@@ -5,6 +5,7 @@ metadata:
   namespace: media
 spec:
   replicas: 1
+  revisionHistoryLimit: 3
   strategy:
     type: Recreate
   selector:
@@ -16,7 +17,7 @@ spec:
         app: qbittorrent
     spec:
       nodeSelector:
-        kubernetes.io/hostname: centralpi
+        kubernetes.io/hostname: centralbook
       # All containers in the pod share gluetun's network. DNS goes to gluetun's
       # own resolver (127.0.0.1), which sends it through the VPN tunnel instead of
       # CoreDNS, so torrent lookups never leave the house unencrypted.

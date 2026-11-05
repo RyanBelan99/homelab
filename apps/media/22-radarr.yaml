@@ -5,6 +5,7 @@ metadata:
   namespace: media
 spec:
   replicas: 1
+  revisionHistoryLimit: 3
   strategy:
     type: Recreate
   selector:
@@ -16,7 +17,7 @@ spec:
         app: radarr
     spec:
       nodeSelector:
-        kubernetes.io/hostname: centralpi
+        kubernetes.io/hostname: centralbook
       containers:
         - name: radarr
           image: lscr.io/linuxserver/radarr:latest

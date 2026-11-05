@@ -5,6 +5,7 @@ metadata:
   namespace: media
 spec:
   replicas: 1
+  revisionHistoryLimit: 3
   strategy:
     type: Recreate
   selector:
@@ -16,7 +17,7 @@ spec:
         app: prowlarr
     spec:
       nodeSelector:
-        kubernetes.io/hostname: centralpi
+        kubernetes.io/hostname: centralbook
       # Indexer searches and .torrent grabs leave through gluetun, like qBittorrent.
       # DNS goes to gluetun (encrypted, through the tunnel). gluetun can't resolve
       # cluster names, so Radarr and Sonarr are pinned in /etc/hosts; their Services
