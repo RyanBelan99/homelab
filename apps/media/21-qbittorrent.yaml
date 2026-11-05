@@ -61,6 +61,11 @@ spec:
             # Allow replies to the home LAN and the cluster's pod/service ranges.
             - name: FIREWALL_OUTBOUND_SUBNETS
               value: "192.168.0.0/24,10.42.0.0/16,10.43.0.0/16"
+            # Two encrypted DNS upstreams (DNS over TLS, inside the tunnel): with only
+            # Cloudflare, a single slow lookup reached the apps as "Resource
+            # temporarily unavailable" and failed an indexer search.
+            - name: DNS_UPSTREAM_RESOLVERS
+              value: "cloudflare,quad9"
             # Proton hands out a new forwarded port on every reconnect. Push it into
             # qBittorrent's listening port (and pin qBittorrent to tun0). This needs
             # qBittorrent's "Bypass authentication for clients on localhost", which only
@@ -138,7 +143,7 @@ metadata:
   name: qbittorrent
   namespace: media
 spec:
-  # In-cluster only: browsers reach it through Traefik (30-ingress.yaml).
+  # In-cluster only: browsers reach it through Traefik (30-routes.yaml).
   selector:
     app: qbittorrent
   ports:

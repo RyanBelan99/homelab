@@ -29,12 +29,18 @@ spec:
               value: America/Los_Angeles
           ports:
             - containerPort: 8096
+          # Each software transcode holds ~200-500 MB in ffmpeg on top of Jellyfin
+          # itself, and the kernel kills the whole container at the limit (every
+          # stream drops). 1536Mi was OOM-killed three times on 2026-11-04 with
+          # four transcodes running; 4Gi leaves room for several at once.
+          # Encoder threads are capped at 4 in Jellyfin's encoding.xml to keep
+          # each ffmpeg small.
           resources:
             requests:
               cpu: 300m
-              memory: 384Mi
+              memory: 512Mi
             limits:
-              memory: 1536Mi
+              memory: 4Gi
           volumeMounts:
             - name: config
               mountPath: /config
@@ -63,7 +69,9 @@ metadata:
   name: jellyfin
   namespace: media
 spec:
-  type: LoadBalancer
+  # In-cluster only: Jellyfin is reached through Traefik (30-routes.yaml), at
+  # jellyfin.home.arpa at home and svc:jellyfin on the tailnet. Point TV apps at
+  # http://jellyfin.home.arpa; port 8096 is no longer open on the node.
   selector:
     app: jellyfin
   ports:

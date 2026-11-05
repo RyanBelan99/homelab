@@ -73,15 +73,14 @@ systemctl reload ssh
 
 echo "== 4/6 firewall: LAN and router VPN reach only the services they use =="
 # Add the specific rules before removing the broad ones, so nothing is cut off.
-# DNS, Traefik and Jellyfin are Kubernetes services: their traffic is forwarded
-# to pods, not delivered to the host, so these allows are a safety net only.
+# DNS and Traefik are Kubernetes services: their traffic is forwarded to pods,
+# not delivered to the host, so these allows are a safety net only.
 for net in $NETS; do
   ufw allow from "$net" to any port 22 proto tcp comment 'ssh'
   ufw allow from "$net" to any port 445 proto tcp comment 'samba'
   ufw allow from "$net" to any port 6443 proto tcp comment 'k3s API (kubectl)'
   ufw allow from "$net" to any port 53 comment 'pi-hole DNS'
   ufw allow from "$net" to any port 80 proto tcp comment 'traefik'
-  ufw allow from "$net" to any port 8096 proto tcp comment 'jellyfin'
 done
 # Now the LAN no longer reaches kubelet (10250), flannel VXLAN (8472/udp),
 # NetBIOS, WS-Discovery/LLMNR or the kube-proxy health-check ports.

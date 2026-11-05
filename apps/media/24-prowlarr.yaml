@@ -66,6 +66,11 @@ spec:
             # Replies to the LAN, plus Prowlarr syncing indexers to Radarr/Sonarr.
             - name: FIREWALL_OUTBOUND_SUBNETS
               value: "192.168.0.0/24,10.42.0.0/16,10.43.0.0/16"
+            # Two encrypted DNS upstreams (DNS over TLS, inside the tunnel): with only
+            # Cloudflare, a single slow lookup reached the apps as "Resource
+            # temporarily unavailable" and failed an indexer search.
+            - name: DNS_UPSTREAM_RESOLVERS
+              value: "cloudflare,quad9"
           startupProbe:
             exec:
               command: ["/gluetun-entrypoint", "healthcheck"]
@@ -108,15 +113,51 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /config
+        - name: flaresolverr
+          image: ghcr.io/germondai/trawl:latest
+          env:
+            - name: LOG_LEVEL
+              value: "info"
+            - name: TZ
+              value: America/Los_Angeles
+            - name: SESSION_CACHE_DRIVER
+              value: memory
+
+            # Single browser
+            - name: BROWSER_POOL_SIZE
+              value: "1"
+
+            # Firefox resource constraints
+            - name: BROWSER_MAX_CONTENT_PROCESSES
+              value: "2"
+            - name: BROWSER_HARDWARE_CONCURRENCY
+              value: "4"
+          ports:
+            - containerPort: 8191
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
       volumes:
         - name: config
           hostPath:
             path: /mnt/config/prowlarr
             type: Directory
+
         - name: tun
           hostPath:
             path: /dev/net/tun
             type: CharDevice
+
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
 ---
 apiVersion: v1
 kind: Service
@@ -124,10 +165,11 @@ metadata:
   name: prowlarr
   namespace: media
 spec:
-  # In-cluster only: browsers reach it through Traefik (30-ingress.yaml).
+  # In-cluster only: browsers reach it through Traefik (30-routes.yaml).
   selector:
     app: prowlarr
   ports:
     - name: web
       port: 9696
       targetPort: 9696
+    

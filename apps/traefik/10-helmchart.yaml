@@ -16,6 +16,14 @@ spec:
     ports:
       web:
         exposedPort: 80
+        # Tailscale Services reach Traefik through `tailscale serve` on the node
+        # itself, which sets X-Forwarded-For to the visitor's tailnet IP. Trust
+        # forwarded headers only from the node (LAN IP or its pod-network
+        # address); everyone else's are replaced with their real address.
+        forwardedHeaders:
+          trustedIPs:
+            - 192.168.0.34/32
+            - 10.42.0.1/32
       # HTTP only for now (*.home.arpa). Open 443 when a real domain + cert exist.
       websecure:
         expose:
