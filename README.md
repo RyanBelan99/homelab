@@ -1,20 +1,22 @@
 # CentralPI homelab
 
-Source of truth for the services running on **CentralPI** (Raspberry Pi 4B), a
-single-node [k3s](https://k3s.io) Kubernetes cluster. Every service runs in its
-own container. The cluster serves the LAN on the Pi's IP, `192.168.0.34`.
+Source of truth for the services running on a two-node [k3s](https://k3s.io)
+Kubernetes cluster: **CentralPI** (Raspberry Pi 4B, the server) and
+**centralbook** (MacBook Pro M1 Pro running Fedora Asahi, an agent for the
+heavier apps, see `docs/host-config.md` section 8). Every service runs in its own
+container. The cluster serves the LAN on the Pi's IP, `192.168.0.34`.
 
 Web apps are reached by name through [Traefik](https://traefik.io) on port 80:
 Pi-hole answers every `*.home.arpa` name with `192.168.0.34`, and Traefik routes
-by hostname. Only DNS, SMB, Traefik and Jellyfin's direct port (for TV apps and
-family accounts) are open on the node.
+by hostname, for home devices and Tailscale Services alike (`<app>.<tailnet>.ts.net`). Only DNS, SMB and
+Traefik are open to the home network, plus SSH and the k3s API for admin.
 
 | Service | Namespace | Address | What it is |
 |---------|-----------|---------|------------|
 | Traefik | `traefik` | :80 | Reverse proxy for every `*.home.arpa` name |
 | Pi-hole | `pihole`  | :53 (DNS), http://pihole.home.arpa/admin/ | Network-wide DNS + ad blocking |
 | Samba   | `nas`     | :445 (SMB) | `NetworkStorage` file share (`~/shared/nas`) |
-| Jellyfin | `media`  | http://jellyfin.home.arpa, :8096 | Media server |
+| Jellyfin | `media`  | http://jellyfin.home.arpa | Media server |
 | qBittorrent + gluetun | `media` | http://qbit.home.arpa | Download client, all traffic through a VPN sidecar |
 | Radarr / Sonarr | `media` | http://radarr.home.arpa / http://sonarr.home.arpa | Movie / TV automation |
 | Prowlarr + gluetun | `media` | http://prowlarr.home.arpa | Indexer manager for Radarr and Sonarr, searches through its own VPN sidecar |
@@ -25,13 +27,13 @@ family accounts) are open on the node.
 
 ```
 apps/          Kubernetes manifests, one folder per service
-  traefik/     namespace + pinned Traefik HelmChart (reverse proxy on :80)
-  pihole/      namespace, secret, PVC, deployment, services, ingress
+  traefik/     namespace + pinned Traefik HelmChart (the front door on :80)
+  pihole/      namespace, secret, PVC, deployment, services, route
   nas/samba/   namespace, secret, deployment
-  media/       namespace, VPN secret, one file per app (deployment + service), ingresses
-  dashboard/   Homepage, ingress
+  media/       namespace, VPN secret, one file per app (deployment + service), routes
+  dashboard/   Homepage, route
   vpn-exit/    proton-exit: Tailscale exit node behind a gluetun ProtonVPN tunnel
-scripts/       the sudo-required setup/cutover scripts (01-06), run in order
+scripts/       the sudo-required setup/cutover scripts (01-09), run in order
 docs/          host-config.md - the non-Kubernetes host settings (cgroups, ufw, DNS, Tailscale)
                tailscale-policy.hujson - tailnet access rules (pasted into the admin console)
 secrets/       real credentials - GITIGNORED, never committed
@@ -44,15 +46,23 @@ The media apps keep their state in hostPath folders on the Pi, not in git:
 
 ## Remote access
 
-[Tailscale](https://tailscale.com) on the host (not in k3s) makes CentralPI a
-subnet router for `192.168.0.0/24` and an exit node. Away from home, tailnet
-devices use the same LAN URLs and Pi-hole as their DNS. No router ports are
-forwarded. Family accounts can reach Jellyfin (`:8096`) only. Setup:
-`scripts/05-tailscale.sh` and `docs/host-config.md` section 6.
+[Tailscale](https://tailscale.com) on the host (not in k3s) is the only way in
+from outside; no router ports are forwarded. Every web app is published as a
+Tailscale Service, `https://<app>.<tailnet>.ts.net` (the Homepage links use these),
+and access is granted per app in `docs/tailscale-policy.hujson`:
+
+- **Admins** (you): every app, plus SSH, kubectl and SMB on CentralPI.
+- **Members** (family): Jellyfin to watch, Seerr to request, Pi-hole as DNS, and
+  the `proton-exit` exit node.
+
+The `*.home.arpa` names are for the home network only. CentralPI still advertises
+`192.168.0.0/24` so tailnet devices can use Pi-hole as DNS, but the policy opens
+nothing else on the LAN. Setup: `scripts/05-tailscale.sh`,
+`scripts/07-tailscale-services.sh` and `docs/host-config.md` section 6.
 
 Two exit nodes, picked per device in the Tailscale app: `centralpi` (websites
-see the home IP) and `proton-exit` (`apps/vpn-exit/`, websites see a ProtonVPN
-IP, with a kill switch if the tunnel drops).
+see the home IP, admins only) and `proton-exit` (`apps/vpn-exit/`, websites see
+a ProtonVPN IP, with a kill switch if the tunnel drops; everyone).
 
 ## Secrets - read this before cloning elsewhere
 
