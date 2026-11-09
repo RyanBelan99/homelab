@@ -19,6 +19,8 @@ Traefik are open to the home network, plus SSH and the k3s API for admin.
 | Jellyfin | `media`  | http://jellyfin.home.arpa | Media server |
 | qBittorrent + gluetun | `media` | http://qbit.home.arpa | Download client, all traffic through a VPN sidecar |
 | Radarr / Sonarr | `media` | http://radarr.home.arpa / http://sonarr.home.arpa | Movie / TV automation |
+| Dispatcharr | `media` | http://dispatcharr.home.arpa | Live TV manager: free channels (Pluto TV, Samsung TV Plus) with failover, served to Jellyfin's Live TV |
+| livetv-playlists | `media` | daily CronJob | Builds the Pluto TV and Samsung TV Plus playlists and syncs Dispatcharr's channels |
 | Prowlarr + gluetun | `media` | http://prowlarr.home.arpa | Indexer manager for Radarr and Sonarr, searches through its own VPN sidecar |
 | Homepage | `dashboard` | http://home.home.arpa | Dashboard |
 | proton-exit (Tailscale + gluetun) | `vpn-exit` | tailnet only | Tailscale exit node whose traffic leaves through ProtonVPN |

@@ -1,0 +1,351 @@
+# Live TV playlists and channels for Dispatcharr (27-dispatcharr.yaml), rebuilt
+# daily by one CronJob.
+#
+# 1. fastlist.py - Pluto TV and Samsung TV Plus playlists. Neither service
+#    publishes one; i.mjh.nz publishes each one's channel list (refreshed
+#    daily) and guide, and jmp2.uk redirects each channel to the service's own
+#    CDN. For each US channel, minus DRM ones Jellyfin can't play:
+#      - stream URL https://jmp2.uk/<prefix><id>
+#      - tvg-id = the service's channel id, matching its i.mjh.nz guide
+#      - channel number: Pluto's own (5-5250), Samsung's + 10000
+#    Output: /mnt/config/dispatcharr/data/m3us/<name>-us.m3u. Dispatcharr
+#    watches that folder and makes each file an M3U source.
+#
+# 2. sync.py - Dispatcharr's channels, through its API. Many channels are on
+#    both services (NFL Channel), so each channel name becomes one Dispatcharr
+#    channel holding every stream with that name, Pluto first, so it fails
+#    over to Samsung if Pluto's stream stops. The first stream also gives the
+#    channel its number, group, logo and guide, and every channel uses the
+#    "Streamlink HLS" stream profile (best video plus the original audio).
+#    It also keeps the Dispatcharr settings this setup relies on: both guide
+#    sources (refreshed every 2h), that profile, and network access that
+#    limits the channel list, guide and streams to the pod network. It
+#    refreshes both playlists first, re-imports the guides after channel
+#    changes, and deletes channels whose streams are gone. Channels from other
+#    sources (iptv-org, set up in the UI) are not its to touch. A source that fails
+#    to refresh, or a stream count that looks broken, stops it before anything
+#    is changed or deleted.
+#
+# Run it now (after editing a script, or on first install):
+#   kubectl -n media create job --from=cronjob/livetv-playlists livetv-playlists-manual
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: livetv-playlists
+  namespace: media
+data:
+  fastlist.py: |
+    # Usage: fastlist.py <name> <i.mjh.nz folder> <jmp2.uk stream template> <chno offset>
+    import gzip, json, os, sys, urllib.request
+
+    name, folder, stream, offset = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+    SOURCE = f"https://i.mjh.nz/{folder}/.channels.json.gz"
+    REGION = "us"
+    MIN_CHANNELS = 100  # a smaller list means the source broke; keep the old file
+    OUT = f"/m3us/{name}-us.m3u"
+
+    req = urllib.request.Request(SOURCE, headers={"User-Agent": "homelab-playlist/1"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(gzip.decompress(resp.read()))
+
+    channels = data["regions"][REGION]["channels"]
+    playable = sorted(
+        ((cid, ch) for cid, ch in channels.items() if not ch.get("license_url")),
+        key=lambda item: item[1]["chno"],
+    )
+    if len(playable) < MIN_CHANNELS:
+        sys.exit(f"{name}: only {len(playable)} playable channels in {SOURCE}, keeping the old playlist")
+
+    def attr(value):
+        return str(value).replace('"', "'")
+
+    lines = ["#EXTM3U"]
+    for cid, ch in playable:
+        lines.append(
+            f'#EXTINF:-1 tvg-id="{cid}" tvg-chno="{ch["chno"] + offset}" '
+            f'tvg-name="{attr(ch["name"])}" tvg-logo="{attr(ch.get("logo", ""))}" '
+            f'group-title="{attr(ch.get("group", ""))}",{ch["name"]}'
+        )
+        lines.append(stream.format(id=cid))
+
+    tmp = OUT + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    os.replace(tmp, OUT)
+    print(f"{name}: wrote {len(playable)} of {len(channels)} channels to {OUT}")
+
+  sync.py: |
+    import json, os, re, sys, time, urllib.error, urllib.parse, urllib.request
+
+    API = "http://dispatcharr.media.svc.cluster.local:9191"
+    KEY = os.environ["DISPATCHARR_API_KEY"]
+    # Priority order: the first source with a channel gives it its name, number,
+    # group, logo and guide; streams from later sources are its failovers.
+    SOURCES = [
+        {"m3u": "/data/m3us/plutotv-us.m3u",
+         "epg_name": "Pluto TV", "epg_url": "https://i.mjh.nz/PlutoTV/us.xml.gz"},
+        {"m3u": "/data/m3us/samsungtvplus-us.m3u",
+         "epg_name": "Samsung TV Plus", "epg_url": "https://i.mjh.nz/SamsungTVPlus/us.xml.gz"},
+    ]
+    MIN_STREAMS = 500  # fewer means a source broke; change nothing
+
+    def api(method, path, body=None):
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(API + path, data=data, method=method, headers={
+            "X-API-Key": KEY, "Content-Type": "application/json", "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                raw = resp.read()
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as e:
+            sys.exit(f"{method} {path}: HTTP {e.code} {e.read().decode()[:300]}")
+
+    def get_all(path):
+        # Works for both paginated ({"results", "next"}) and plain list responses.
+        out = api("GET", path + ("&" if "?" in path else "?") + "page_size=10000")
+        if isinstance(out, list):
+            return out
+        items = out["results"]
+        while out.get("next"):
+            nxt = urllib.parse.urlsplit(out["next"])
+            out = api("GET", nxt.path + "?" + nxt.query)
+            items += out["results"]
+        return items
+
+    def wait(what, check, timeout=900):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            result = check()
+            if result:
+                return result
+            time.sleep(5)
+        sys.exit(f"timed out waiting for {what}")
+
+    def key(name):
+        # Lowercased letters and digits only, so "NFL Channel" and "NFL CHANNEL"
+        # are one channel.
+        return re.sub(r"[^a-z0-9]", "", name.lower())
+
+    # 0. Only Jellyfin needs the channel list, guide and streams, and it reaches
+    #    Dispatcharr from the pod network; by default anyone on the home network
+    #    could fetch them without logging in. The web UI keeps its login.
+    POD_ONLY = "10.42.0.0/16,127.0.0.0/8,::1/128"
+    network = next(s for s in get_all("/api/core/settings/") if s["key"] == "network_access")
+    want_network = {**(network["value"] or {}), "M3U_EPG": POD_ONLY, "STREAMS": POD_ONLY}
+    if network["value"] != want_network:
+        api("PATCH", f"/api/core/settings/{network['id']}/", {"value": want_network})
+        print(f"limited channel list, guide and streams to {POD_ONLY}")
+
+    # 1. Refresh both playlists. Dispatcharr creates a source for each file in
+    #    its watched folder on its own; a new one may wait in pending_setup until
+    #    its first refresh.
+    accounts = {}
+    for src in SOURCES:
+        acct = wait(f"M3U source for {src['m3u']}", lambda: next(
+            (a for a in get_all("/api/m3u/accounts/") if a.get("file_path") == src["m3u"]), None), 300)
+        before = acct["updated_at"]
+        api("POST", f"/api/m3u/refresh/{acct['id']}/")
+        acct = wait(f"refresh of {src['m3u']}", lambda: (
+            lambda a: a if a["status"] in ("success", "error") and a["updated_at"] != before else None
+        )(api("GET", f"/api/m3u/accounts/{acct['id']}/")))
+        if acct["status"] != "success":
+            sys.exit(f"refresh of {src['m3u']} failed: {acct.get('last_message')}")
+        accounts[acct["id"]] = src
+        print(f"refreshed {src['m3u']}: {acct.get('last_message', '')[:120]}")
+
+    # 2. Make sure each guide source exists. Dispatcharr refreshes them itself,
+    #    every EPG_REFRESH_HOURS: i.mjh.nz updates them every hour or two, and
+    #    they only reach a few hours ahead (Samsung about 6, Pluto about 20).
+    EPG_REFRESH_HOURS = 2
+    epg_sources = {s["url"]: s for s in get_all("/api/epg/sources/")}
+    for src in SOURCES:
+        if src["epg_url"] not in epg_sources:
+            epg_sources[src["epg_url"]] = api("POST", "/api/epg/sources/", {
+                "name": src["epg_name"], "source_type": "xmltv", "url": src["epg_url"],
+                "is_active": True, "refresh_interval": EPG_REFRESH_HOURS})
+            print(f"created guide source {src['epg_name']}")
+        elif epg_sources[src["epg_url"]].get("refresh_interval") != EPG_REFRESH_HOURS:
+            api("PATCH", f"/api/epg/sources/{epg_sources[src['epg_url']]['id']}/",
+                {"refresh_interval": EPG_REFRESH_HOURS})
+            print(f"set {src['epg_name']} guide refresh to every {EPG_REFRESH_HOURS}h")
+        src["epg_id"] = epg_sources[src["epg_url"]]["id"]
+    epg_ids = {(e["epg_source"], e["tvg_id"]): e["id"] for e in get_all("/api/epg/epgdata/")}
+
+    # 3. Group the streams by channel name, in priority order.
+    order = {acct_id: i for i, acct_id in enumerate(accounts)}
+    all_streams = get_all("/api/channels/streams/")
+    stream_account = {s["id"]: s["m3u_account"] for s in all_streams}
+    streams = [s for s in all_streams
+               if s["m3u_account"] in accounts and not s.get("is_stale")]
+    if len(streams) < MIN_STREAMS:
+        sys.exit(f"only {len(streams)} streams, expected at least {MIN_STREAMS}; changing nothing")
+    groups = {}
+    for s in sorted(streams, key=lambda s: (order[s["m3u_account"]], s.get("stream_chno") or 1e9, s["id"])):
+        groups.setdefault(key(s["name"]), []).append(s)
+
+    # Streamlink, not the default FFmpeg profile: FFmpeg's "-map 0" relays every
+    # quality the service offers at once, while Streamlink picks the best video
+    # plus the default audio track (Pluto sends audio as a separate track).
+    # Our own copy of the built-in Streamlink profile, with two changes:
+    #  - hls:// forced: Samsung's jmp2.uk links have no .m3u8 ending, so
+    #    Streamlink can't tell they're HLS on its own ("No plugin can handle URL")
+    #  - --hls-audio-select: Pluto offers "English [Original]" and an "English"
+    #    Audio Description track, and without it both get muxed in, unflagged,
+    #    so players may pick the described one. Streamlink lowercases the track
+    #    name before comparing; channels without that track use their default.
+    profile = {
+        "name": "Streamlink HLS",
+        "command": "streamlink",
+        "parameters": "--http-header User-Agent={userAgent} --hls-audio-select 'english [original]' "
+                      "--ffmpeg-fout mpegts --stdout hls://{streamUrl} best",
+        "is_active": True,
+    }
+    existing_profile = next((p for p in get_all("/api/core/streamprofiles/") if p["name"] == profile["name"]), None)
+    if existing_profile is None:
+        existing_profile = api("POST", "/api/core/streamprofiles/", profile)
+        print(f"created stream profile {profile['name']}")
+    elif any(existing_profile.get(f) != v for f, v in profile.items()):
+        existing_profile = api("PATCH", f"/api/core/streamprofiles/{existing_profile['id']}/", profile)
+        print(f"updated stream profile {profile['name']}")
+    STREAM_PROFILE = existing_profile["id"]
+
+    logos = {l["url"]: l["id"] for l in get_all("/api/channels/logos/")}
+
+    def logo_id(stream):
+        url = stream.get("logo_url")
+        if not url:
+            return None
+        if url not in logos:
+            logos[url] = api("POST", "/api/channels/logos/", {"name": stream["name"], "url": url})["id"]
+        return logos[url]
+
+    # Pluto sometimes gives two channels the same number; the second one gets
+    # the next free decimal (250, 250.1) so every channel number is unique.
+    numbers = {}
+    taken = set()
+    for k, group in sorted(groups.items(), key=lambda kv: (kv[1][0].get("stream_chno") or 1e9, kv[0])):
+        n = group[0].get("stream_chno")
+        if n is not None:
+            while n in taken:
+                n = round(n + 0.1, 1)
+            taken.add(n)
+        numbers[k] = n
+
+    def desired(k, group):
+        first = group[0]
+        epg = next((epg_ids[(accounts[s["m3u_account"]]["epg_id"], s["tvg_id"])] for s in group
+                    if (accounts[s["m3u_account"]]["epg_id"], s["tvg_id"]) in epg_ids), None)
+        return {
+            "name": first["name"],
+            "channel_number": numbers[k],
+            "channel_group_id": first["channel_group"],
+            "tvg_id": first["tvg_id"],
+            "epg_data_id": epg,
+            "streams": [s["id"] for s in group],
+            "logo_id": logo_id(first),
+            "stream_profile_id": STREAM_PROFILE,
+        }
+
+    # 4. Create, update and delete channels to match. Only channels made from
+    #    these playlists are ours: any other source's channels (say iptv-org,
+    #    added in the UI with its own auto channel sync) are left alone. A
+    #    channel with no streams left is one whose streams were all removed, so
+    #    it is cleaned up too.
+    def ours(ch):
+        return not ch["streams"] or any(stream_account.get(s) in accounts for s in ch["streams"])
+
+    existing = {}
+    duplicates = []
+    for ch in filter(ours, get_all("/api/channels/channels/")):
+        k = key(ch["name"])
+        (duplicates.append(ch["id"]) if k in existing else existing.__setitem__(k, ch))
+    created = updated = 0
+    for k, group in groups.items():
+        want = desired(k, group)
+        have = existing.get(k)
+        if have is None:
+            api("POST", "/api/channels/channels/", want)
+            created += 1
+            continue
+        change = {f: v for f, v in want.items() if have.get(f) != v}
+        if change:
+            api("PATCH", f"/api/channels/channels/{have['id']}/", change)
+            updated += 1
+    stale = [ch["id"] for k, ch in existing.items() if k not in groups] + duplicates
+    if stale:
+        api("DELETE", "/api/channels/channels/bulk-delete/", {"channel_ids": stale})
+    # Dispatcharr only stores programmes for guide entries linked to a channel,
+    # so re-import the guides when channels were added or relinked.
+    if created or updated:
+        for src in SOURCES:
+            api("POST", "/api/epg/import/", {"id": src["epg_id"]})
+        print("re-importing guides for new or changed channels")
+    failover = sum(1 for g in groups.values() if len(g) > 1)
+    print(f"sync: {len(groups)} channels from {len(streams)} streams ({failover} with a failover stream); "
+          f"{created} created, {updated} updated, {len(stale)} deleted")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: livetv-playlists
+  namespace: media
+spec:
+  # Daily, a few hours after i.mjh.nz refreshes. Jellyfin picks up channel
+  # changes on its own daily Refresh Guide task.
+  schedule: "15 5 * * *"
+  timeZone: America/Los_Angeles
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: OnFailure
+          nodeSelector:
+            kubernetes.io/hostname: centralbook
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          containers:
+            - name: build
+              image: python:3.13.9-alpine3.22
+              # Each playlist keeps its previous file when its source looks
+              # broken, and the sync still runs on whatever files are there.
+              command:
+                - sh
+                - -c
+                - |
+                  rc=0
+                  python3 -I /script/fastlist.py plutotv PlutoTV 'https://jmp2.uk/plu-{id}.m3u8' 0 || rc=1
+                  python3 -I /script/fastlist.py samsungtvplus SamsungTVPlus 'https://jmp2.uk/stvp-{id}' 10000 || rc=1
+                  python3 -I -u /script/sync.py || rc=1
+                  exit $rc
+              env:
+                - name: DISPATCHARR_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: dispatcharr-api
+                      key: DISPATCHARR_API_KEY
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+              volumeMounts:
+                - name: script
+                  mountPath: /script
+                  readOnly: true
+                - name: m3us
+                  mountPath: /m3us
+          volumes:
+            - name: script
+              configMap:
+                name: livetv-playlists
+            - name: m3us
+              hostPath:
+                path: /mnt/config/dispatcharr/data/m3us
+                type: Directory

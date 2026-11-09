@@ -40,6 +40,7 @@
 			"svc:prowlarr": ["tag:homelab"],
 			"svc:qbit":     ["tag:homelab"],
 			"svc:pihole":   ["tag:homelab"],
+			"svc:dispatcharr": ["tag:homelab"],
 		},
 	},
 
@@ -75,7 +76,7 @@
 		// Admins: the admin apps, each behind its own Tailscale Service.
 		{
 			"src": ["autogroup:admin"],
-			"dst": ["svc:home", "svc:radarr", "svc:sonarr", "svc:prowlarr", "svc:qbit", "svc:pihole"],
+			"dst": ["svc:home", "svc:radarr", "svc:sonarr", "svc:prowlarr", "svc:qbit", "svc:pihole", "svc:dispatcharr"],
 			"ip":  ["tcp:443"],
 		},
 		// Admins: SSH, kubectl and the NetworkStorage share on CentralPI.

@@ -158,6 +158,13 @@ data:
             namespace: media
             app: seerr
             podSelector: app=seerr
+        - Dispatcharr:
+            icon: dispatcharr.png
+            href: https://dispatcharr.{{HOMEPAGE_VAR_TAILNET}}/
+            description: Live TV channels for Jellyfin
+            namespace: media
+            app: dispatcharr
+            podSelector: app=dispatcharr
     - Automation:
         - Radarr:
             icon: radarr.svg

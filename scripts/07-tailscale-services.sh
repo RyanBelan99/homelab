@@ -22,7 +22,8 @@ TRAEFIK=http://192.168.0.34:80
 SERVICES=(
   jellyfin   # everyone
   seerr      # everyone
-  home       # admins only, like every name below (see the policy's grants)
+  dispatcharr # admins only, like every name below (see the policy's grants)
+  home
   radarr
   sonarr
   prowlarr
