@@ -1,0 +1,131 @@
+# proton-exit: a second Tailscale exit node whose internet traffic leaves
+# through ProtonVPN instead of the home connection. Pick it per device in the
+# Tailscale app (Exit node > proton-exit); centralpi stays the home-IP exit.
+#
+# gluetun owns the pod's network: its firewall is the kill switch, so if the
+# tunnel drops, proton-exit has no internet at all instead of leaking the home
+# IP. Tailscale runs in userspace mode (no NET_ADMIN, no host interface) and
+# shares that network, so both its own control traffic and every exit-node
+# connection go through Proton.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proton-exit
+  namespace: vpn-exit
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: proton-exit
+  template:
+    metadata:
+      labels:
+        app: proton-exit
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: centralpi
+      # DNS goes to gluetun (encrypted, through the tunnel).
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+          - 127.0.0.1
+      initContainers:
+        # Native sidecar: starts first, and Tailscale only starts once the
+        # startupProbe says the tunnel is up.
+        - name: gluetun
+          image: qmcgaw/gluetun:v3.41.3
+          restartPolicy: Always
+          # A restarted container keeps the pod's network namespace, including
+          # the policy-routing rules of a run that died abruptly (probe kill,
+          # power loss). gluetun then fails forever with "adding IPv6 rule:
+          # file exists". Clear them before every start (the gluetun wiki's
+          # Kubernetes fix, run before the entrypoint instead of racing it).
+          command:
+            - /bin/sh
+            - -c
+            - |
+              while ip rule del table 51820 2>/dev/null; do :; done
+              while ip -6 rule del table 51820 2>/dev/null; do :; done
+              exec /gluetun-entrypoint
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]
+          envFrom:
+            - secretRef:
+                name: vpn-credentials-proton-exit
+          env:
+            - name: TZ
+              value: America/Los_Angeles
+            - name: VPN_TYPE
+              value: wireguard
+            # Tailscale's own WireGuard packets ride inside this tunnel and are up
+            # to 1340 bytes (1280 + 60). gluetun's default 1320 drops or fragments
+            # every full-size one, which throttles the exit node to a few KB/s.
+            # 1380 fits them and still leaves room under the pod's 1450 MTU.
+            - name: WIREGUARD_MTU
+              value: "1380"
+          startupProbe:
+            exec:
+              command: ["/gluetun-entrypoint", "healthcheck"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            exec:
+              command: ["/gluetun-entrypoint", "healthcheck"]
+            periodSeconds: 60
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: tun
+              mountPath: /dev/net/tun
+      containers:
+        - name: tailscale
+          image: tailscale/tailscale:v1.104.2
+          envFrom:
+            - secretRef:
+                name: tailscale-auth-proton-exit
+          env:
+            - name: TS_HOSTNAME
+              value: proton-exit
+            - name: TS_USERSPACE
+              value: "true"
+            - name: TS_STATE_DIR
+              value: /var/lib/tailscale
+            # Inside Kubernetes the image defaults to keeping state in a Secret,
+            # which needs RBAC and cluster DNS (gluetun's DNS can't resolve
+            # kubernetes.default.svc). Keep it in TS_STATE_DIR on the node instead.
+            - name: TS_KUBE_SECRET
+              value: ""
+            # Use the auth key only when there is no saved state yet.
+            - name: TS_AUTH_ONCE
+              value: "true"
+            - name: TS_EXTRA_ARGS
+              value: --advertise-exit-node --advertise-tags=tag:exit-proton
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/tailscale
+      volumes:
+        - name: state
+          hostPath:
+            path: /mnt/config/proton-exit
+            type: DirectoryOrCreate
+        - name: tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice

@@ -7,6 +7,7 @@ metadata:
     app: samba
 spec:
   replicas: 1
+  revisionHistoryLimit: 3
   strategy:
     type: Recreate
   selector:
@@ -22,6 +23,9 @@ spec:
       # skips the ServiceLB/DNAT path.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
+      # The share lives on the Pi's disk (hostPath below), and 192.168.0.34 is the Pi.
+      nodeSelector:
+        kubernetes.io/hostname: centralpi
       containers:
         - name: samba
           image: ghcr.io/servercontainers/samba:latest@sha256:57859789bd3425e6e929269fa13b16251cc8b8f939e4362ed7100aaf41a17122

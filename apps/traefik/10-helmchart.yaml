@@ -1,0 +1,48 @@
+# Traefik, installed by k3s's built-in helm-controller from this HelmChart.
+# k3s itself still runs with --disable traefik: this copy is pinned and lives in
+# git instead of following whatever version k3s bundles. Upgrade by bumping
+# `version` (https://github.com/traefik/traefik-helm-chart/releases).
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: traefik
+  namespace: traefik
+spec:
+  repo: https://traefik.github.io/charts
+  chart: traefik
+  version: 41.7.1
+  targetNamespace: traefik
+  valuesContent: |-
+    ports:
+      web:
+        exposedPort: 80
+        # Tailscale Services reach Traefik through `tailscale serve` on the node
+        # itself, which sets X-Forwarded-For to the visitor's tailnet IP. Trust
+        # forwarded headers only from the node (LAN IP or its pod-network
+        # address); everyone else's are replaced with their real address.
+        forwardedHeaders:
+          trustedIPs:
+            - 192.168.0.34/32
+            - 10.42.0.1/32
+      # HTTP only for now (*.home.arpa). Open 443 when a real domain + cert exist.
+      websecure:
+        expose:
+          default: false
+    service:
+      spec:
+        type: LoadBalancer
+        # Keep real LAN client IPs in Traefik's view instead of the svclb pod's.
+        externalTrafficPolicy: Local
+    # Stays on the Pi, the cluster's front door: externalTrafficPolicy: Local
+    # only answers on the node running Traefik, and only the Pi runs ServiceLB.
+    nodeSelector:
+      kubernetes.io/hostname: centralpi
+    ingressClass:
+      enabled: true
+      isDefaultClass: true
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 256Mi

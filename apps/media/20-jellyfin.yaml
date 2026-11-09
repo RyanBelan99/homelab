@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jellyfin
+  namespace: media
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: jellyfin
+  template:
+    metadata:
+      labels:
+        app: jellyfin
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: centralbook
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: jellyfin
+          image: jellyfin/jellyfin:latest
+          env:
+            - name: TZ
+              value: America/Los_Angeles
+          ports:
+            - containerPort: 8096
+          # Each software transcode holds ~200-500 MB in ffmpeg on top of Jellyfin
+          # itself, and the kernel kills the whole container at the limit (every
+          # stream drops). 1536Mi was OOM-killed three times on 2026-11-04 with
+          # four transcodes running; 4Gi leaves room for several at once.
+          # Encoder threads are capped at 4 in Jellyfin's encoding.xml to keep
+          # each ffmpeg small.
+          resources:
+            requests:
+              cpu: 300m
+              memory: 512Mi
+            limits:
+              memory: 4Gi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: cache
+              mountPath: /cache
+            - name: media
+              mountPath: /data/media
+              readOnly: true
+      volumes:
+        - name: config
+          hostPath:
+            path: /mnt/config/jellyfin/config
+            type: Directory
+        - name: cache
+          hostPath:
+            path: /mnt/config/jellyfin/cache
+            type: Directory
+        - name: media
+          hostPath:
+            path: /mnt/data/media
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jellyfin
+  namespace: media
+spec:
+  # In-cluster only: Jellyfin is reached through Traefik (30-routes.yaml), at
+  # jellyfin.home.arpa at home and svc:jellyfin on the tailnet. Point TV apps at
+  # http://jellyfin.home.arpa; port 8096 is no longer open on the node.
+  selector:
+    app: jellyfin
+  ports:
+    - name: web
+      port: 8096
+      targetPort: 8096

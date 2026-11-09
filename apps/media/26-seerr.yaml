@@ -1,0 +1,79 @@
+# Seerr: the request page. Anyone with access (family included, see
+# docs/tailscale-policy.hujson) asks for a movie or show, and Seerr hands it to
+# Radarr or Sonarr. Sign-in uses Jellyfin accounts. Lives on centralbook with the
+# apps it talks to; it needs no /mnt/data, only its own config folder.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seerr
+  namespace: media
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: seerr
+  template:
+    metadata:
+      labels:
+        app: seerr
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: centralbook
+      # Seerr ships without an init process and expects Docker's `init: true`.
+      # Sharing the pod's process namespace makes the pause container PID 1,
+      # which reaps zombies and forwards signals the same way.
+      shareProcessNamespace: true
+      containers:
+        - name: seerr
+          # The image always runs as uid 1000 (node), matching /mnt/config owners.
+          image: ghcr.io/seerr-team/seerr:v3.5.1
+          env:
+            - name: TZ
+              value: America/Los_Angeles
+            - name: LOG_LEVEL
+              value: info
+          ports:
+            - containerPort: 5055
+          readinessProbe:
+            httpGet:
+              path: /api/v1/settings/public
+              port: 5055
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /api/v1/settings/public
+              port: 5055
+            initialDelaySeconds: 60
+            periodSeconds: 60
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+      volumes:
+        - name: config
+          hostPath:
+            path: /mnt/config/seerr
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seerr
+  namespace: media
+spec:
+  # In-cluster only: browsers reach it through Traefik (30-routes.yaml), at
+  # seerr.home.arpa at home and svc:seerr on the tailnet.
+  selector:
+    app: seerr
+  ports:
+    - name: web
+      port: 5055
+      targetPort: 5055
