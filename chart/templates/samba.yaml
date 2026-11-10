@@ -1,0 +1,51 @@
+{{- $app := .Values.apps.samba }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: samba
+  namespace: {{ $app.namespace }}
+  labels:
+    app: samba
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: samba
+  template:
+    metadata:
+      labels:
+        app: samba
+    spec:
+      # Discovery broadcasts (Avahi, WSDD2, NetBIOS) only reach the LAN from the host network.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- include "homelab.nodeSelector" (list . $app.node) | nindent 6 }}
+      containers:
+        - name: samba
+          image: {{ $app.image }}
+          envFrom:
+            - secretRef:
+                name: samba-config
+          env:
+            {{- include "homelab.tz" . | nindent 12 }}
+          ports:
+            - name: smb
+              containerPort: 445
+              protocol: TCP
+          volumeMounts:
+            - name: nas-data
+              mountPath: /shares/nas
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 50m
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: nas-data
+          hostPath:
+            path: {{ .Values.paths.nasShare }}
+            type: Directory

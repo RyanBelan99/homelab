@@ -1,0 +1,189 @@
+{{- $app := .Values.apps.homepage }}
+{{- $tailnet := .Values.secrets.tailnet }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: homepage
+  namespace: {{ $app.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homepage
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, pods, nodes]
+    verbs: [get, list]
+  - apiGroups: [metrics.k8s.io]
+    resources: [nodes, pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homepage
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homepage
+subjects:
+  - kind: ServiceAccount
+    name: homepage
+    namespace: {{ $app.namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: homepage
+  namespace: {{ $app.namespace }}
+data:
+  kubernetes.yaml: |
+    mode: cluster
+    ingress: false
+    traefik: true
+    gateway: false
+  settings.yaml: |
+    title: {{ $app.title }}
+    theme: dark
+    color: slate
+    headerStyle: clean
+    statusStyle: dot
+    hideVersion: true
+    showStats: true
+    layout:
+    {{- range .Values.dashboard.groups }}
+      {{ .name }}:
+        style: row
+        columns: {{ .columns }}
+    {{- end }}
+  widgets.yaml: |
+    - kubernetes:
+        cluster:
+          show: true
+          cpu: true
+          memory: true
+          showLabel: true
+          label: cluster
+        nodes:
+          show: true
+          cpu: true
+          memory: true
+          showLabel: true
+    - datetime:
+        text_size: md
+        format:
+          dateStyle: medium
+          timeStyle: short
+  # Tiles link to each app's Tailscale Service; widgets call the in-cluster address.
+  services.yaml: |
+    {{- range .Values.dashboard.groups }}
+    - {{ .name }}:
+      {{- range $key := .tiles }}
+      {{- $a := index $.Values.apps $key | default dict }}
+      {{- $t := $a.dashboard | default (index $.Values.dashboard.extras $key) }}
+      {{- $label := $t.appLabel | default $key | kebabcase }}
+        - {{ $t.title }}:
+            icon: {{ $t.icon }}
+            {{- with $a.route }}
+            href: https://{{ .host }}.{{ $tailnet }}{{ $t.path | default "/" }}
+            {{- end }}
+            description: {{ tpl $t.description $ }}
+            namespace: {{ $a.namespace | default $t.namespace }}
+            app: {{ $label }}
+            podSelector: {{ $t.podSelector | default (printf "app=%s" $label) }}
+            {{- with $t.widget }}
+            widget:
+              {{- range $k, $v := omit . "keyVar" }}
+              {{ $k }}: {{ if kindIs "slice" $v }}[{{ join ", " $v }}]{{ else }}{{ $v }}{{ end }}
+              {{- end }}
+              key: "{{ "{{" }}HOMEPAGE_VAR_{{ .keyVar }}{{ "}}" }}"
+            {{- end }}
+      {{- end }}
+    {{- end }}
+  bookmarks.yaml: ""
+  docker.yaml: ""
+  custom.css: ""
+  custom.js: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homepage
+  namespace: {{ $app.namespace }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: homepage
+  template:
+    metadata:
+      labels:
+        app: homepage
+    spec:
+      serviceAccountName: homepage
+      automountServiceAccountToken: true
+      securityContext:
+        {{- include "homelab.runAsAdmin" . | nindent 8 }}
+      # Homepage writes defaults into /app/config, so seed a writable copy of the ConfigMap.
+      initContainers:
+        - name: seed-config
+          image: {{ $app.image }}
+          command: ["sh", "-c", "cp -L /config-src/* /app/config/"]
+          volumeMounts:
+            - name: config-src
+              mountPath: /config-src
+            - name: config
+              mountPath: /app/config
+      containers:
+        - name: homepage
+          image: {{ $app.image }}
+          env:
+            - name: MY_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: HOMEPAGE_ALLOWED_HOSTS
+              value: "$(MY_POD_IP):3000,{{ $app.route.host }}.{{ .Values.network.localDomain }},{{ $app.route.host }}.{{ $tailnet }}"
+          envFrom:
+            - secretRef:
+                name: homepage-widgets
+          ports:
+            - name: http
+              containerPort: 3000
+          livenessProbe:
+            httpGet:
+              path: /api/healthcheck
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 60
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 384Mi
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+      volumes:
+        - name: config-src
+          configMap:
+            name: homepage
+        - name: config
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: homepage
+  namespace: {{ $app.namespace }}
+spec:
+  selector:
+    app: homepage
+  ports:
+    - name: web
+      port: 3000
+      targetPort: 3000

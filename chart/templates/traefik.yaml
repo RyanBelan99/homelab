@@ -1,0 +1,39 @@
+{{- $app := .Values.apps.traefik }}
+# Installed by k3s's helm-controller; k3s runs with --disable traefik so the version is pinned here.
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: traefik
+  namespace: {{ $app.namespace }}
+spec:
+  repo: https://traefik.github.io/charts
+  chart: traefik
+  version: {{ $app.chartVersion }}
+  targetNamespace: {{ $app.namespace }}
+  valuesContent: |-
+    ports:
+      web:
+        exposedPort: 80
+        # tailscale serve on the node sets X-Forwarded-For; trust only the node.
+        forwardedHeaders:
+          trustedIPs:
+            - {{ .Values.nodes.server.ip }}/32
+            - {{ .Values.network.podGateway }}/32
+      websecure:
+        expose:
+          default: false
+    service:
+      spec:
+        type: LoadBalancer
+        externalTrafficPolicy: Local
+    nodeSelector:
+      kubernetes.io/hostname: {{ (index .Values.nodes $app.node).name }}
+    ingressClass:
+      enabled: true
+      isDefaultClass: true
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 256Mi

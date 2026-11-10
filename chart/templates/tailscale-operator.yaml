@@ -1,0 +1,22 @@
+{{- $app := .Values.apps.tailscaleOperator }}
+# Puts the k3s API on the tailnet. Auth mode: callers are identified by Tailscale
+# and impersonated, so RBAC applies per user or tag (grants in docs/tailscale-policy.hujson).
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: tailscale-operator
+  namespace: {{ $app.namespace }}
+spec:
+  repo: https://pkgs.tailscale.com/helmcharts
+  chart: tailscale-operator
+  version: {{ $app.chartVersion }}
+  targetNamespace: {{ $app.namespace }}
+  valuesContent: |-
+    operatorConfig:
+      hostname: {{ $app.hostname }}
+      defaultTags:
+        - "tag:k8s-operator"
+      nodeSelector:
+        kubernetes.io/hostname: {{ (index .Values.nodes $app.node).name }}
+    apiServerProxyConfig:
+      mode: "true"

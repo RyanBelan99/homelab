@@ -1,0 +1,10 @@
+{{- $namespaces := dict }}
+{{- range .Values.apps }}{{ $_ := set $namespaces .namespace true }}{{ end }}
+{{- range $ns, $_ := $namespaces }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  {{- include "homelab.keepAnnotation" $ | nindent 2 }}
+{{- end }}

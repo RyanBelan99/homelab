@@ -1,0 +1,73 @@
+{{- $app := .Values.apps.qbittorrent }}
+{{- $n := .Values.network }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qbittorrent
+  namespace: {{ $app.namespace }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: qbittorrent
+  template:
+    metadata:
+      labels:
+        app: qbittorrent
+    spec:
+      {{- include "homelab.nodeSelector" (list . $app.node) | nindent 6 }}
+      # DNS through gluetun, inside the tunnel.
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+          - 127.0.0.1
+      initContainers:
+        {{- include "homelab.gluetun" (dict "root" . "image" $app.gluetunImage "secret" "vpn-credentials-qbittorrent" "env" (list
+          (dict "name" "FIREWALL_INPUT_PORTS" "value" "8080")
+          (dict "name" "FIREWALL_OUTBOUND_SUBNETS" "value" (printf "%s,%s,%s" $n.lanCIDR $n.podCIDR $n.serviceCIDR))
+          (dict "name" "DNS_UPSTREAM_RESOLVERS" "value" "cloudflare,quad9")
+          (dict "name" "VPN_PORT_FORWARDING_UP_COMMAND" "value" "/bin/sh -c 'wget -q -O- --retry-connrefused --tries=30 --post-data \"json={\\\"listen_port\\\":{{PORTS}},\\\"current_network_interface\\\":\\\"tun0\\\"}\" http://127.0.0.1:8080/api/v2/app/setPreferences'")
+        )) | nindent 8 }}
+      containers:
+        - name: qbittorrent
+          image: {{ $app.image }}
+          env:
+            {{- include "homelab.linuxserverEnv" . | nindent 12 }}
+            - name: WEBUI_PORT
+              value: "8080"
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: data
+              mountPath: /data
+      volumes:
+        {{- include "homelab.configVolume" (list . "config" "qbittorrent") | nindent 8 }}
+        - name: data
+          hostPath:
+            path: {{ .Values.paths.data }}
+            type: Directory
+        {{- include "homelab.tunVolume" . | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qbittorrent
+  namespace: {{ $app.namespace }}
+spec:
+  selector:
+    app: qbittorrent
+  ports:
+    - name: web
+      port: 8080
+      targetPort: 8080

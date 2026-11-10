@@ -1,95 +1,59 @@
-// Tailscale access policy - source of truth for the tailnet.
-// Apply by pasting into https://login.tailscale.com/admin/acls/file and saving.
-//
-// Roles come from the admin console's Users page, not from a list in this file:
-// you are an Admin (autogroup:admin), family members are plain Members. So
-// pasting this file never drops anyone's access, and no emails land in git.
-//
-// Remote access is only through Tailscale Services (https://<app>.<tailnet>.ts.net).
-// The *.home.arpa names are for the home network only: the subnet route stays
-// advertised so tailnet devices can use Pi-hole, but grants open nothing else on it.
+// Tailnet access policy. Paste into the admin console (Access controls) to apply.
+// Roles come from the console's Users page: admins are autogroup:admin, everyone else a member.
 {
-	// Names for IPs, so rules read as what they are. Tailscale filters packets,
-	// so a rule can only name an IP, never a DNS name like pihole.home.arpa.
 	"hosts": {
 		"pihole-dns": "192.168.0.34",
 	},
 
 	"tagOwners": {
-		// CentralPI now, the mini PC later. Tagged nodes never hit key expiry.
-		"tag:homelab": ["autogroup:admin"],
-		// proton-exit: exit node whose traffic leaves through ProtonVPN
-		// (apps/vpn-exit/).
-		"tag:exit-proton": ["autogroup:admin"],
+		"tag:homelab":      ["autogroup:admin"],
+		"tag:exit-proton":  ["autogroup:admin"],
+		"tag:k8s-operator": ["autogroup:admin"],
+		"tag:k8s":          ["tag:k8s-operator"],
 	},
 
-	// Any tag:homelab node can advertise the LAN, act as an exit node, and host
-	// Tailscale Services without a manual approval click. A second node
-	// advertising the same route or Service becomes an automatic failover for it.
 	"autoApprovers": {
 		"routes":   {"192.168.0.0/24": ["tag:homelab"]},
 		"exitNode": ["tag:homelab", "tag:exit-proton"],
-		// Published by scripts/07-tailscale-services.sh; each one must also be
-		// defined on the admin console's Services page (port tcp:443).
+		// One per app route; each is also defined on the console's Services page (tcp:443).
 		"services": {
-			"svc:jellyfin": ["tag:homelab"],
-			"svc:seerr":    ["tag:homelab"],
-			"svc:home":     ["tag:homelab"],
-			"svc:radarr":   ["tag:homelab"],
-			"svc:sonarr":   ["tag:homelab"],
-			"svc:prowlarr": ["tag:homelab"],
-			"svc:qbit":     ["tag:homelab"],
-			"svc:pihole":   ["tag:homelab"],
+			"svc:jellyfin":    ["tag:homelab"],
+			"svc:seerr":       ["tag:homelab"],
+			"svc:home":        ["tag:homelab"],
+			"svc:radarr":      ["tag:homelab"],
+			"svc:sonarr":      ["tag:homelab"],
+			"svc:prowlarr":    ["tag:homelab"],
+			"svc:qbit":        ["tag:homelab"],
+			"svc:pihole":      ["tag:homelab"],
 			"svc:dispatcharr": ["tag:homelab"],
 		},
 	},
 
 	"grants": [
-		// Everyone: their own devices talk to each other (Taildrop, etc).
-		{
-			"src": ["autogroup:member"],
-			"dst": ["autogroup:self"],
-			"ip":  ["*"],
-		},
-		// Everyone: Jellyfin to watch, Seerr to request, each through Traefik
-		// behind its own Tailscale Service.
-		{
-			"src": ["autogroup:member"],
-			"dst": ["svc:jellyfin", "svc:seerr"],
-			"ip":  ["tcp:443"],
-		},
-		// Everyone uses Pi-hole as DNS, at its LAN IP through the subnet route (so
-		// Pi-hole sees each device's real 100.x IP). Without this, family devices
-		// lose all name resolution under the DNS override.
-		{
-			"src": ["autogroup:member"],
-			"dst": ["pihole-dns"],
-			"ip":  ["tcp:53", "udp:53"],
-		},
-		// Everyone may use proton-exit, so family browsing never shows the home IP.
-		{
-			"src": ["autogroup:member"],
-			"dst": ["autogroup:internet"],
-			"ip":  ["*"],
-			"via": ["tag:exit-proton"],
-		},
-		// Admins: the admin apps, each behind its own Tailscale Service.
+		// Members: own devices, Jellyfin and Seerr, Pi-hole DNS, and the ProtonVPN exit node.
+		{"src": ["autogroup:member"], "dst": ["autogroup:self"], "ip": ["*"]},
+		{"src": ["autogroup:member"], "dst": ["svc:jellyfin", "svc:seerr"], "ip": ["tcp:443"]},
+		{"src": ["autogroup:member"], "dst": ["pihole-dns"], "ip": ["tcp:53", "udp:53"]},
+		{"src": ["autogroup:member"], "dst": ["autogroup:internet"], "ip": ["*"], "via": ["tag:exit-proton"]},
+
+		// Admins: every app.
 		{
 			"src": ["autogroup:admin"],
 			"dst": ["svc:home", "svc:radarr", "svc:sonarr", "svc:prowlarr", "svc:qbit", "svc:pihole", "svc:dispatcharr"],
 			"ip":  ["tcp:443"],
 		},
-		// Admins: SSH, kubectl and the NetworkStorage share on CentralPI.
+		// Admins: kubectl through the operator's API proxy, impersonated as cluster-admin.
 		{
 			"src": ["autogroup:admin"],
-			"dst": ["tag:homelab"],
-			"ip":  ["tcp:22", "tcp:6443", "tcp:445"],
+			"dst": ["tag:k8s-operator"],
+			"ip":  ["tcp:443"],
+			"app": {
+				"tailscale.com/cap/kubernetes": [{"impersonate": {"groups": ["system:masters"]}}],
+			},
 		},
-		// Admins: either exit node (centralpi = home IP, proton-exit = ProtonVPN).
-		{
-			"src": ["autogroup:admin"],
-			"dst": ["autogroup:internet"],
-			"ip":  ["*"],
-		},
+		// Admins: SSH, SMB, and the k3s API directly (break-glass).
+		{"src": ["autogroup:admin"], "dst": ["tag:homelab"], "ip": ["tcp:22", "tcp:6443", "tcp:445"]},
+		// Admins: either exit node.
+		{"src": ["autogroup:admin"], "dst": ["autogroup:internet"], "ip": ["*"]},
 	],
 }

@@ -1,0 +1,98 @@
+{{- $app := .Values.apps.prowlarr }}
+{{- $n := .Values.network }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prowlarr
+  namespace: {{ $app.namespace }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: prowlarr
+  template:
+    metadata:
+      labels:
+        app: prowlarr
+    spec:
+      {{- include "homelab.nodeSelector" (list . $app.node) | nindent 6 }}
+      # gluetun's DNS can't resolve cluster names, so Radarr and Sonarr are pinned here.
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+          - 127.0.0.1
+      hostAliases:
+        {{- range $name := list "radarr" "sonarr" }}
+        - ip: {{ (index $.Values.apps $name).clusterIP }}
+          hostnames: [{{ $name | quote }}, "{{ $name }}.{{ (index $.Values.apps $name).namespace }}.svc.cluster.local"]
+        {{- end }}
+      initContainers:
+        {{- include "homelab.gluetun" (dict "root" . "image" $app.gluetunImage "secret" "vpn-credentials-prowlarr" "env" (list
+          (dict "name" "FIREWALL_INPUT_PORTS" "value" "9696")
+          (dict "name" "FIREWALL_OUTBOUND_SUBNETS" "value" (printf "%s,%s,%s" $n.lanCIDR $n.podCIDR $n.serviceCIDR))
+          (dict "name" "DNS_UPSTREAM_RESOLVERS" "value" "cloudflare,quad9")
+        )) | nindent 8 }}
+      containers:
+        - name: prowlarr
+          image: {{ $app.image }}
+          env:
+            {{- include "homelab.linuxserverEnv" . | nindent 12 }}
+          ports:
+            - containerPort: 9696
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 384Mi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+        - name: flaresolverr
+          image: {{ $app.flaresolverrImage }}
+          env:
+            - name: LOG_LEVEL
+              value: "info"
+            {{- include "homelab.tz" . | nindent 12 }}
+            - name: SESSION_CACHE_DRIVER
+              value: memory
+            - name: BROWSER_POOL_SIZE
+              value: "1"
+            - name: BROWSER_MAX_CONTENT_PROCESSES
+              value: "2"
+            - name: BROWSER_HARDWARE_CONCURRENCY
+              value: "4"
+          ports:
+            - containerPort: 8191
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        {{- include "homelab.configVolume" (list . "config" "prowlarr") | nindent 8 }}
+        {{- include "homelab.tunVolume" . | nindent 8 }}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prowlarr
+  namespace: {{ $app.namespace }}
+spec:
+  selector:
+    app: prowlarr
+  ports:
+    - name: web
+      port: 9696
+      targetPort: 9696

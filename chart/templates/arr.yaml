@@ -1,0 +1,62 @@
+{{/* Radarr and Sonarr: identical apart from name, port and limits. ClusterIPs are pinned for Prowlarr's hostAliases. */}}
+{{- range $name, $port := dict "radarr" 7878 "sonarr" 8989 }}
+{{- $app := index $.Values.apps $name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $app.namespace }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+    spec:
+      {{- include "homelab.nodeSelector" (list $ $app.node) | nindent 6 }}
+      containers:
+        - name: {{ $name }}
+          image: {{ $app.image }}
+          env:
+            {{- include "homelab.linuxserverEnv" $ | nindent 12 }}
+          ports:
+            - containerPort: {{ $port }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: data
+              mountPath: /data
+      volumes:
+        {{- include "homelab.configVolume" (list $ "config" $name) | nindent 8 }}
+        - name: data
+          hostPath:
+            path: {{ $.Values.paths.data }}
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $app.namespace }}
+spec:
+  clusterIP: {{ $app.clusterIP }}
+  selector:
+    app: {{ $name }}
+  ports:
+    - name: web
+      port: {{ $port }}
+      targetPort: {{ $port }}
+{{- end }}
