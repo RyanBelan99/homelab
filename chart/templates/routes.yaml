@@ -1,0 +1,19 @@
+{{/* One Traefik route per app with a route: <host>.<localDomain> on the LAN, <host>.<tailnet> via its Tailscale Service. */}}
+{{- range $name, $app := .Values.apps }}
+{{- with $app.route }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $name }}
+  namespace: {{ $app.namespace }}
+spec:
+  entryPoints: [web]
+  routes:
+    - match: 'Host(`{{ .host }}.{{ $.Values.network.localDomain }}`) || HostRegexp(`^{{ .host }}\..+\.ts\.net$`)'
+      kind: Rule
+      services:
+        - name: {{ .service }}
+          port: {{ .port }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,64 @@
+{{- $app := .Values.apps.jellyfin }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jellyfin
+  namespace: {{ $app.namespace }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: jellyfin
+  template:
+    metadata:
+      labels:
+        app: jellyfin
+    spec:
+      {{- include "homelab.nodeSelector" (list . $app.node) | nindent 6 }}
+      securityContext:
+        {{- include "homelab.runAsAdmin" . | nindent 8 }}
+      containers:
+        - name: jellyfin
+          image: {{ $app.image }}
+          env:
+            {{- include "homelab.tz" . | nindent 12 }}
+          ports:
+            - containerPort: 8096
+          # Each software transcode adds 200-500 MB of ffmpeg.
+          resources:
+            requests:
+              cpu: 300m
+              memory: 512Mi
+            limits:
+              memory: 4Gi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: cache
+              mountPath: /cache
+            - name: media
+              mountPath: /data/media
+              readOnly: true
+      volumes:
+        {{- include "homelab.configVolume" (list . "config" "jellyfin/config") | nindent 8 }}
+        {{- include "homelab.configVolume" (list . "cache" "jellyfin/cache") | nindent 8 }}
+        - name: media
+          hostPath:
+            path: {{ .Values.paths.data }}/media
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jellyfin
+  namespace: {{ $app.namespace }}
+spec:
+  selector:
+    app: jellyfin
+  ports:
+    - name: web
+      port: 8096
+      targetPort: 8096

@@ -1,0 +1,79 @@
+{{- $app := .Values.apps.livetvPlaylists }}
+{{- $dispatcharr := .Values.apps.dispatcharr }}
+# Builds the Pluto TV and Samsung TV Plus playlists, then syncs Dispatcharr's channels.
+# Run now: kubectl -n media create job --from=cronjob/livetv-playlists livetv-playlists-manual
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: livetv-playlists
+  namespace: {{ $app.namespace }}
+data:
+  fastlist.py: |
+    {{- .Files.Get "files/livetv/fastlist.py" | nindent 4 }}
+  sync.py: |
+    {{- .Files.Get "files/livetv/sync.py" | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: livetv-playlists
+  namespace: {{ $app.namespace }}
+spec:
+  schedule: {{ $app.schedule | quote }}
+  timeZone: {{ .Values.timezone }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: OnFailure
+          {{- include "homelab.nodeSelector" (list . $app.node) | nindent 10 }}
+          securityContext:
+            {{- include "homelab.runAsAdmin" . | nindent 12 }}
+          containers:
+            - name: build
+              image: {{ $app.image }}
+              # A playlist whose source looks broken keeps its old file; the sync still runs.
+              command:
+                - sh
+                - -c
+                - |
+                  rc=0
+                  python3 -I /script/fastlist.py plutotv PlutoTV 'https://jmp2.uk/plu-{id}.m3u8' 0 || rc=1
+                  python3 -I /script/fastlist.py samsungtvplus SamsungTVPlus 'https://jmp2.uk/stvp-{id}' 10000 || rc=1
+                  python3 -I -u /script/sync.py || rc=1
+                  exit $rc
+              env:
+                - name: DISPATCHARR_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: dispatcharr-api
+                      key: DISPATCHARR_API_KEY
+                - name: DISPATCHARR_URL
+                  value: http://dispatcharr.{{ $dispatcharr.namespace }}.svc.cluster.local:9191
+                - name: POD_CIDR
+                  value: {{ .Values.network.podCIDR }}
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+              volumeMounts:
+                - name: script
+                  mountPath: /script
+                  readOnly: true
+                - name: m3us
+                  mountPath: /m3us
+          volumes:
+            - name: script
+              configMap:
+                name: livetv-playlists
+            - name: m3us
+              hostPath:
+                path: {{ .Values.paths.config }}/dispatcharr/data/m3us
+                type: Directory

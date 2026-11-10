@@ -1,0 +1,66 @@
+{{- $app := .Values.apps.protonExit }}
+# Tailscale exit node whose traffic leaves through ProtonVPN. Userspace Tailscale
+# shares gluetun's network, so nothing leaks if the tunnel drops.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proton-exit
+  namespace: {{ $app.namespace }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: proton-exit
+  template:
+    metadata:
+      labels:
+        app: proton-exit
+    spec:
+      {{- include "homelab.nodeSelector" (list . $app.node) | nindent 6 }}
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+          - 127.0.0.1
+      # MTU 1380 fits Tailscale's 1340-byte packets inside the tunnel.
+      initContainers:
+        {{- include "homelab.gluetun" (dict "root" . "image" $app.gluetunImage "secret" "vpn-credentials-proton-exit" "env" (list
+          (dict "name" "WIREGUARD_MTU" "value" "1380")
+        )) | nindent 8 }}
+      containers:
+        - name: tailscale
+          image: {{ $app.tailscaleImage }}
+          envFrom:
+            - secretRef:
+                name: tailscale-auth-proton-exit
+          env:
+            - name: TS_HOSTNAME
+              value: {{ $app.hostname }}
+            - name: TS_USERSPACE
+              value: "true"
+            - name: TS_STATE_DIR
+              value: /var/lib/tailscale
+            # State on disk, not in a Secret: gluetun's DNS can't resolve the API server.
+            - name: TS_KUBE_SECRET
+              value: ""
+            - name: TS_AUTH_ONCE
+              value: "true"
+            - name: TS_EXTRA_ARGS
+              value: --advertise-exit-node --advertise-tags={{ $app.tag }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/tailscale
+      volumes:
+        - name: state
+          hostPath:
+            path: {{ .Values.paths.config }}/proton-exit
+            type: DirectoryOrCreate
+        {{- include "homelab.tunVolume" . | nindent 8 }}

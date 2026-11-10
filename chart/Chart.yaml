@@ -1,0 +1,5 @@
+apiVersion: v2
+name: homelab
+description: Every service on the homelab k3s cluster, configured from one values file.
+type: application
+version: 1.0.0

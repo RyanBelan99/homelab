@@ -1,0 +1,66 @@
+{{- $app := .Values.apps.seerr }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seerr
+  namespace: {{ $app.namespace }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: seerr
+  template:
+    metadata:
+      labels:
+        app: seerr
+    spec:
+      {{- include "homelab.nodeSelector" (list . $app.node) | nindent 6 }}
+      # No init in the image: the pause container becomes PID 1 and reaps zombies.
+      shareProcessNamespace: true
+      containers:
+        - name: seerr
+          image: {{ $app.image }}
+          env:
+            {{- include "homelab.tz" . | nindent 12 }}
+            - name: LOG_LEVEL
+              value: info
+          ports:
+            - containerPort: 5055
+          readinessProbe:
+            httpGet:
+              path: /api/v1/settings/public
+              port: 5055
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /api/v1/settings/public
+              port: 5055
+            initialDelaySeconds: 60
+            periodSeconds: 60
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+      volumes:
+        {{- include "homelab.configVolume" (list . "config" "seerr") | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seerr
+  namespace: {{ $app.namespace }}
+spec:
+  selector:
+    app: seerr
+  ports:
+    - name: web
+      port: 5055
+      targetPort: 5055

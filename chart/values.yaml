@@ -1,0 +1,225 @@
+# Central config for the cluster. Secrets live in
+# ../secrets/secrets.yaml (gitignored, see ../secrets.example.yaml).
+
+timezone: America/Los_Angeles
+
+# Host account that owns the hostPath data and the Samba share.
+admin:
+  user: rbelan
+  uid: 1000
+  gid: 1000
+
+network:
+  lanCIDR: 192.168.0.0/24
+  podCIDR: 10.42.0.0/16
+  podGateway: 10.42.0.1
+  serviceCIDR: 10.43.0.0/16
+  localDomain: home.arpa
+
+# server: k3s control plane, ServiceLB, front door. worker: heavy apps.
+nodes:
+  server:
+    name: centralpi
+    ip: 192.168.0.34
+  worker:
+    name: centralbook
+
+paths:
+  config: /mnt/config
+  data: /mnt/data
+  nasShare: /home/rbelan/shared/nas
+
+# Every app: where it runs, what it runs, and how it is reached.
+#   route.host       <host>.<localDomain> on the LAN, <host>.<tailnet> as a Tailscale Service
+#   dashboard        its Homepage tile (layout under dashboard: at the bottom)
+apps:
+  pihole:
+    namespace: pihole
+    node: server
+    image: docker.io/pihole/pihole:latest@sha256:f7d1be836e3bc608b56d82fc9904f5a831cdfbc0dc9c6d58f94e4c985c70038b
+    unboundImage: klutchell/unbound:latest@sha256:5020cfe1218aeda38777f88279220162e602c3a44efc684550dbf46137106a16
+    route: {host: pihole, service: pihole-web, port: 80}
+    dashboard:
+      title: Pi-hole
+      icon: pi-hole.svg
+      description: DNS + ad blocking
+      path: /admin/
+      widget:
+        type: pihole
+        version: 6
+        url: http://pihole-web.pihole.svc.cluster.local
+        keyVar: PIHOLE_KEY
+
+  samba:
+    namespace: nas
+    node: server
+    image: ghcr.io/servercontainers/samba:latest@sha256:57859789bd3425e6e929269fa13b16251cc8b8f939e4362ed7100aaf41a17122
+    shareName: NetworkStorage
+    dashboard:
+      title: Samba
+      icon: mdi-folder-network
+      description: "NetworkStorage share (smb://{{ .Values.nodes.server.ip }})"
+
+  traefik:
+    namespace: traefik
+    node: server
+    chartVersion: 41.7.1
+    dashboard:
+      title: Traefik
+      icon: traefik.svg
+      description: "Front door on :80 ({{ .Values.nodes.server.name }})"
+      podSelector: app.kubernetes.io/name=traefik
+
+  tailscaleOperator:
+    namespace: tailscale
+    node: server
+    chartVersion: 1.104.4
+    hostname: tailscale-operator
+
+  protonExit:
+    namespace: vpn-exit
+    node: server
+    gluetunImage: qmcgaw/gluetun:v3.41.3
+    tailscaleImage: tailscale/tailscale:v1.104.2
+    hostname: proton-exit
+    tag: tag:exit-proton
+    dashboard:
+      appLabel: proton-exit
+      title: proton-exit
+      icon: proton-vpn.svg
+      description: Tailscale exit node via ProtonVPN
+      podSelector: app=proton-exit
+
+  jellyfin:
+    namespace: media
+    node: worker
+    image: jellyfin/jellyfin:latest
+    route: {host: jellyfin, service: jellyfin, port: 8096}
+    dashboard:
+      title: Jellyfin
+      icon: jellyfin.svg
+      description: Media server
+      widget:
+        type: jellyfin
+        url: http://jellyfin.media.svc.cluster.local:8096
+        keyVar: JELLYFIN_KEY
+        version: 2
+        fields: [movies, series, episodes]
+        enableBlocks: true
+        enableNowPlaying: true
+        expandOneStreamToTwoRows: false
+
+  seerr:
+    namespace: media
+    node: worker
+    image: ghcr.io/seerr-team/seerr:v3.5.1
+    route: {host: seerr, service: seerr, port: 5055}
+    dashboard:
+      title: Seerr
+      icon: seerr.svg
+      description: Request movies and shows
+
+  dispatcharr:
+    namespace: media
+    node: worker
+    image: ghcr.io/dispatcharr/dispatcharr@sha256:96bc548978c68e684677da7895692eeeefb7f0b2edfa38311dac2b702c61d236
+    postgresImage: postgres:17.11-trixie
+    redisImage: redis:8.8.4-trixie
+    route: {host: dispatcharr, service: dispatcharr, port: 9191}
+    dashboard:
+      title: Dispatcharr
+      icon: dispatcharr.png
+      description: Live TV channels for Jellyfin
+
+  livetvPlaylists:
+    namespace: media
+    node: worker
+    image: python:3.13.9-alpine3.22
+    schedule: "15 5 * * *"
+
+  radarr:
+    namespace: media
+    node: worker
+    image: lscr.io/linuxserver/radarr:latest
+    clusterIP: 10.43.23.177
+    route: {host: radarr, service: radarr, port: 7878}
+    dashboard:
+      title: Radarr
+      icon: radarr.svg
+      description: Movies
+      widget:
+        type: radarr
+        url: http://radarr.media.svc.cluster.local:7878
+        keyVar: RADARR_KEY
+        fields: [wanted, queued, movies]
+
+  sonarr:
+    namespace: media
+    node: worker
+    image: lscr.io/linuxserver/sonarr:latest
+    clusterIP: 10.43.39.177
+    route: {host: sonarr, service: sonarr, port: 8989}
+    dashboard:
+      title: Sonarr
+      icon: sonarr.svg
+      description: TV
+      widget:
+        type: sonarr
+        url: http://sonarr.media.svc.cluster.local:8989
+        keyVar: SONARR_KEY
+
+  prowlarr:
+    namespace: media
+    node: worker
+    image: lscr.io/linuxserver/prowlarr:latest
+    gluetunImage: qmcgaw/gluetun:latest
+    flaresolverrImage: ghcr.io/germondai/trawl:latest
+    route: {host: prowlarr, service: prowlarr, port: 9696}
+    dashboard:
+      title: Prowlarr
+      icon: prowlarr.svg
+      description: Indexers (via VPN)
+      widget:
+        type: prowlarr
+        url: http://prowlarr.media.svc.cluster.local:9696
+        keyVar: PROWLARR_KEY
+        fields: [numberOfGrabs, numberOfQueries, numberOfFailGrabs]
+
+  qbittorrent:
+    namespace: media
+    node: worker
+    image: lscr.io/linuxserver/qbittorrent:latest
+    gluetunImage: qmcgaw/gluetun:latest
+    route: {host: qbit, service: qbittorrent, port: 8080}
+    dashboard:
+      title: qBittorrent
+      icon: qbittorrent.svg
+      description: Downloads (via VPN)
+
+  homepage:
+    namespace: dashboard
+    node: null
+    image: ghcr.io/gethomepage/homepage:latest
+    title: CentralPI
+    route: {host: home, service: homepage, port: 3000}
+
+# Homepage layout: groups and tile order. A tile is an app key above or an extra below.
+dashboard:
+  groups:
+    - {name: Infrastructure, columns: 3, tiles: [pihole, samba]}
+    - {name: Cluster, columns: 4, tiles: [traefik, coredns, protonExit, metricsServer]}
+    - {name: Media, columns: 3, tiles: [jellyfin, seerr, dispatcharr]}
+    - {name: Automation, columns: 4, tiles: [radarr, sonarr, prowlarr, qbittorrent]}
+  extras:
+    coredns:
+      title: CoreDNS
+      icon: mdi-dns
+      description: Cluster DNS (*.svc.cluster.local)
+      namespace: kube-system
+      podSelector: k8s-app=kube-dns
+    metricsServer:
+      title: metrics-server
+      icon: mdi-chart-line
+      description: Feeds the CPU and memory numbers
+      namespace: kube-system
+      podSelector: k8s-app=metrics-server

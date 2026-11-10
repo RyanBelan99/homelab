@@ -1,13 +1,10 @@
-# Real Kubernetes Secrets — never commit (templates live as *.yaml.example)
+# Real secrets, never commit (template: secrets.example.yaml)
+secrets.yaml
 **/10-secret.yaml
-
-# Plaintext credentials
 secrets/
 CREDENTIALS.txt
 
-# macOS Finder metadata
 .DS_Store
-
-# Point-in-time backups (large, go stale)
 backups/
 *.zip
+__pycache__/
