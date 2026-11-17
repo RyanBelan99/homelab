@@ -218,6 +218,10 @@ apps:
       port: 8080
       lan: false
       middlewares: [{name: forwarded-https, namespace: auth}]
+    sso:
+      # OIDC clients in the homelab realm. Imported only when the realm is first
+      # created; a client added here later must also be added in the console.
+      clients: [homepage, prowlarr, radarr, sonarr, qbittorrent, pihole, dispatcharr]
     dashboard:
       title: Keycloak
       icon: keycloak.svg

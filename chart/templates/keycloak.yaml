@@ -5,6 +5,14 @@
 {{- $existing := (lookup "v1" "Secret" $app.namespace "keycloak-secrets").data | default dict }}
 {{- $dbPassword := (get $existing "DB_PASSWORD" | b64dec) | default (randAlphaNum 32) }}
 {{- $adminPassword := (get $existing "KC_BOOTSTRAP_ADMIN_PASSWORD" | b64dec) | default (randAlphaNum 32) }}
+{{- $existingClients := (lookup "v1" "Secret" $app.namespace "oidc-clients").data | default dict }}
+{{- /* One OIDC client per app in sso.clients, named after its route host (https://<host>.<tailnet>). */}}
+{{- $clients := list }}
+{{- range $key := $app.sso.clients }}
+{{- $target := index $.Values.apps $key }}
+{{- $env := printf "CLIENT_SECRET_%s" ($key | snakecase | upper) }}
+{{- $clients = append $clients (dict "key" $key "host" $target.route.host "env" $env "secret" ((get $existingClients $env | b64dec) | default (randAlphaNum 40))) }}
+{{- end }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -17,6 +25,69 @@ stringData:
   # Temporary admin: sign in once, create your own admin user, then delete this one.
   KC_BOOTSTRAP_ADMIN_USERNAME: bootstrap-admin
   KC_BOOTSTRAP_ADMIN_PASSWORD: {{ $adminPassword | quote }}
+---
+# OIDC client secrets, shared by Keycloak (realm import) and each app's oauth2-proxy.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: oidc-clients
+  namespace: {{ $app.namespace }}
+  {{- include "homelab.keepAnnotation" $ | nindent 2 }}
+type: Opaque
+stringData:
+  {{- range $clients }}
+  {{ .env }}: {{ .secret | quote }}
+  {{- end }}
+---
+# The homelab realm, imported once on the first start without it (Keycloak skips
+# existing realms). Users are created in the console; secrets resolve from env.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm
+  namespace: {{ $app.namespace }}
+data:
+  homelab-realm.json: |
+    {{- $clientDefs := list }}
+    {{- range $clients }}
+    {{- $url := printf "https://%s.%s" .host $tailnet }}
+    {{- $clientDefs = append $clientDefs (dict
+        "clientId" .host
+        "name" .key
+        "enabled" true
+        "protocol" "openid-connect"
+        "publicClient" false
+        "clientAuthenticatorType" "client-secret"
+        "secret" (printf "${%s}" .env)
+        "standardFlowEnabled" true
+        "directAccessGrantsEnabled" false
+        "implicitFlowEnabled" false
+        "serviceAccountsEnabled" false
+        "rootUrl" $url
+        "redirectUris" (list (printf "%s/oauth2/callback" $url))
+        "webOrigins" (list $url)
+        "attributes" (dict "pkce.code.challenge.method" "S256" "post.logout.redirect.uris" (printf "%s/*" $url))
+        "protocolMappers" (list
+          (dict "name" "groups" "protocol" "openid-connect" "protocolMapper" "oidc-group-membership-mapper"
+                "config" (dict "claim.name" "groups" "full.path" "false" "id.token.claim" "true" "access.token.claim" "true" "userinfo.token.claim" "true"))
+          (dict "name" "audience" "protocol" "openid-connect" "protocolMapper" "oidc-audience-mapper"
+                "config" (dict "included.client.audience" .host "access.token.claim" "true" "id.token.claim" "false"))
+        )) }}
+    {{- end }}
+    {{- dict
+        "realm" "homelab"
+        "displayName" "Homelab"
+        "enabled" true
+        "sslRequired" "external"
+        "registrationAllowed" false
+        "resetPasswordAllowed" false
+        "loginWithEmailAllowed" true
+        "bruteForceProtected" true
+        "failureFactor" 10
+        "permanentLockout" false
+        "groups" (list (dict "name" "admins") (dict "name" "members"))
+        "clients" $clientDefs
+      | toPrettyJson | nindent 4 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -112,7 +183,10 @@ spec:
       containers:
         - name: keycloak
           image: {{ $app.image }}
-          args: ["start"]
+          args: ["start", "--import-realm"]
+          envFrom:
+            - secretRef:
+                name: oidc-clients
           env:
             {{- include "homelab.tz" $ | nindent 12 }}
             - name: KC_DB
@@ -169,6 +243,14 @@ spec:
               memory: 512Mi
             limits:
               memory: 1536Mi
+          volumeMounts:
+            - name: realm
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+      volumes:
+        - name: realm
+          configMap:
+            name: keycloak-realm
 ---
 apiVersion: v1
 kind: Service
