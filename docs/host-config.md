@@ -35,6 +35,7 @@ Re-apply them after wiping an app's config.
 | Jellyfin | Networking > LAN networks | `192.168.0.0/24` | Only the home LAN is local; tailnet clients (100.x) count as remote |
 | Jellyfin | Playback > Internet streaming bitrate limit | 7.5 Mbps | Fits the ~10 Mbps home upload; 1080p is kept from about 7 Mbps up (5 Mbps drops to 720p) |
 | Jellyfin | Transcoding > Throttle transcodes, Delete segments | Off | Let streams prepare to the end instead of pausing 3 minutes ahead |
+| Jellyfin | Transcoding > Allow encoding in HEVC, Encoder preset | On, veryfast | Software x265 runs ~2.2x real time at 1080p on centralbook; HEVC gives better quality at the same remote bitrate |
 | qBittorrent | Speed > Global upload limit | 60 KiB/s | Seeding otherwise takes ~2 Mbps of the upload remote streams need |
 | Radarr, Sonarr, Prowlarr | Settings > General > Authentication | External | Keycloak (forward auth) is the only sign-in; the API still needs its key |
 | Keycloak | homelab realm > Users | Your user, in group `admins`, email verified | The realm import creates groups and clients, not users; the master realm is only for administering Keycloak |
