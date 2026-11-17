@@ -22,6 +22,22 @@ adding an app (publishes its Tailscale Service).
 - Policy: [`tailscale-policy.hujson`](tailscale-policy.hujson).
 - DNS: nameserver = server LAN IP, with Override DNS servers and Use with exit node on. HTTPS Certificates on.
 - Services: each app route defined on the Services page (tcp:443).
+- Funnel: only Jellyfin is public, at `watch.<tailnet>.ts.net` (operator Ingress, `apps.jellyfin.funnel`). New Funnel names take about 2 minutes to reach the public relays.
+
+## App settings outside the chart
+
+The apps keep these in their own config files (under `paths.config`), not in Helm values.
+Re-apply them after wiping an app's config.
+
+| App | Setting | Value | Why |
+|---|---|---|---|
+| Jellyfin | Networking > Known proxies | `10.42.0.0/16`, `192.168.0.34` | Trust Traefik's and `tailscale serve`'s `X-Forwarded-For`, so Jellyfin sees the real client IP |
+| Jellyfin | Networking > LAN networks | `192.168.0.0/24` | Only the home LAN is local; tailnet clients (100.x) count as remote |
+| Jellyfin | Playback > Internet streaming bitrate limit | 7.5 Mbps | Fits the ~10 Mbps home upload; 1080p is kept from about 7 Mbps up (5 Mbps drops to 720p) |
+| Jellyfin | Transcoding > Throttle transcodes, Delete segments | Off | Let streams prepare to the end instead of pausing 3 minutes ahead |
+| qBittorrent | Speed > Global upload limit | 60 KiB/s | Seeding otherwise takes ~2 Mbps of the upload remote streams need |
+
+At home, use `jellyfin.home.arpa`: tailnet clients are always remote, so `ts.net` gets the cap even on the LAN.
 
 ## kubectl
 

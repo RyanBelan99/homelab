@@ -95,6 +95,8 @@ apps:
     node: worker
     image: jellyfin/jellyfin:latest
     route: {host: jellyfin, service: jellyfin, port: 8096}
+    # Public through Tailscale Funnel; remove to make Jellyfin tailnet/LAN-only again.
+    funnel: {host: watch}
     dashboard:
       title: Jellyfin
       icon: jellyfin.svg

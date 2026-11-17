@@ -29,6 +29,12 @@
 		},
 	},
 
+	// Funnel (public HTTPS) for the operator's proxies, which carry tag:k8s.
+	// Only an Ingress annotated tailscale.com/funnel: "true" is public: today, Jellyfin.
+	"nodeAttrs": [
+		{"target": ["tag:k8s"], "attr": ["funnel"]},
+	],
+
 	"grants": [
 		// Members: own devices, Jellyfin and Seerr, Pi-hole DNS, and the ProtonVPN exit node.
 		{"src": ["autogroup:member"], "dst": ["autogroup:self"], "ip": ["*"]},
