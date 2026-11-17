@@ -31,6 +31,7 @@ paths:
 
 # Every app: where it runs, what it runs, and how it is reached.
 #   route.host       <host>.<localDomain> on the LAN, <host>.<tailnet> as a Tailscale Service
+#   route.lan        false = tailnet only (the LAN path skips the Tailscale policy); admin apps set it
 #   dashboard        its Homepage tile (layout under dashboard: at the bottom)
 apps:
   pihole:
@@ -38,7 +39,7 @@ apps:
     node: server
     image: docker.io/pihole/pihole:latest@sha256:f7d1be836e3bc608b56d82fc9904f5a831cdfbc0dc9c6d58f94e4c985c70038b
     unboundImage: klutchell/unbound:latest@sha256:5020cfe1218aeda38777f88279220162e602c3a44efc684550dbf46137106a16
-    route: {host: pihole, service: pihole-web, port: 80}
+    route: {host: pihole, service: pihole-web, port: 80, lan: false}
     dashboard:
       title: Pi-hole
       icon: pi-hole.svg
@@ -127,7 +128,7 @@ apps:
     image: ghcr.io/dispatcharr/dispatcharr@sha256:96bc548978c68e684677da7895692eeeefb7f0b2edfa38311dac2b702c61d236
     postgresImage: postgres:17.11-trixie
     redisImage: redis:8.8.4-trixie
-    route: {host: dispatcharr, service: dispatcharr, port: 9191}
+    route: {host: dispatcharr, service: dispatcharr, port: 9191, lan: false}
     dashboard:
       title: Dispatcharr
       icon: dispatcharr.png
@@ -144,7 +145,7 @@ apps:
     node: worker
     image: lscr.io/linuxserver/radarr:latest
     clusterIP: 10.43.23.177
-    route: {host: radarr, service: radarr, port: 7878}
+    route: {host: radarr, service: radarr, port: 7878, lan: false}
     dashboard:
       title: Radarr
       icon: radarr.svg
@@ -160,7 +161,7 @@ apps:
     node: worker
     image: lscr.io/linuxserver/sonarr:latest
     clusterIP: 10.43.39.177
-    route: {host: sonarr, service: sonarr, port: 8989}
+    route: {host: sonarr, service: sonarr, port: 8989, lan: false}
     dashboard:
       title: Sonarr
       icon: sonarr.svg
@@ -176,7 +177,7 @@ apps:
     image: lscr.io/linuxserver/prowlarr:latest
     gluetunImage: qmcgaw/gluetun:latest
     flaresolverrImage: ghcr.io/germondai/trawl:latest
-    route: {host: prowlarr, service: prowlarr, port: 9696}
+    route: {host: prowlarr, service: prowlarr, port: 9696, lan: false}
     dashboard:
       title: Prowlarr
       icon: prowlarr.svg
@@ -192,7 +193,7 @@ apps:
     node: worker
     image: lscr.io/linuxserver/qbittorrent:latest
     gluetunImage: qmcgaw/gluetun:latest
-    route: {host: qbit, service: qbittorrent, port: 8080}
+    route: {host: qbit, service: qbittorrent, port: 8080, lan: false}
     dashboard:
       title: qBittorrent
       icon: qbittorrent.svg
@@ -203,7 +204,7 @@ apps:
     node: null
     image: ghcr.io/gethomepage/homepage:latest
     title: CentralPI
-    route: {host: home, service: homepage, port: 3000}
+    route: {host: home, service: homepage, port: 3000, lan: false}
 
 # Homepage layout: groups and tile order. A tile is an app key above or an extra below.
 dashboard:

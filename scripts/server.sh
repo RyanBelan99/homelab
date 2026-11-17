@@ -112,9 +112,9 @@ tailscale up --hostname="$(hostname)" \
   --snat-subnet-routes=false --accept-dns=false
 
 echo "== tailscale services: one per app route =="
-# shellcheck disable=SC2016  # literal backtick in Traefik's Host(`...`) rule
+# shellcheck disable=SC2016  # literal backtick in Traefik's Host(`...`) / HostRegexp(`^...`) rules
 for host in $(k3s kubectl get ingressroute -A -o jsonpath='{.items[*].spec.routes[0].match}' 2>/dev/null \
-    | grep -o 'Host(`[^.`]*' | cut -c7- | sort -u); do
+    | grep -oE 'Host(Regexp)?\(`\^?[a-z0-9-]+' | sed -E 's/.*`\^?//' | sort -u); do
   tailscale serve --service="svc:$host" --https=443 "http://$IP:80" \
     || echo "svc:$host: define it on the admin console's Services page, then re-run"
 done
