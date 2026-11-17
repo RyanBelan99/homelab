@@ -62,6 +62,7 @@ data:
         "directAccessGrantsEnabled" false
         "implicitFlowEnabled" false
         "serviceAccountsEnabled" false
+        "fullScopeAllowed" false
         "rootUrl" $url
         "redirectUris" (list (printf "%s/oauth2/callback" $url))
         "webOrigins" (list $url)

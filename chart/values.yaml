@@ -224,7 +224,7 @@ apps:
       # created; a client added here later must also be added in the console.
       clients: [homepage, prowlarr, radarr, sonarr, qbittorrent, pihole, dispatcharr]
       # Apps behind Keycloak sign-in (oauth2-proxy + forward auth, admins group only).
-      protect: [homepage]
+      protect: [homepage, prowlarr, radarr, sonarr, qbittorrent, pihole, dispatcharr]
     dashboard:
       title: Keycloak
       icon: keycloak.svg
