@@ -212,6 +212,7 @@ apps:
     node: worker
     image: quay.io/keycloak/keycloak:26.8.1
     postgresImage: postgres:18.7-alpine
+    oauth2ProxyImage: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
     route:
       host: auth
       service: keycloak
@@ -222,6 +223,8 @@ apps:
       # OIDC clients in the homelab realm. Imported only when the realm is first
       # created; a client added here later must also be added in the console.
       clients: [homepage, prowlarr, radarr, sonarr, qbittorrent, pihole, dispatcharr]
+      # Apps behind Keycloak sign-in (oauth2-proxy + forward auth, admins group only).
+      protect: [homepage]
     dashboard:
       title: Keycloak
       icon: keycloak.svg

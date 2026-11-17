@@ -5,13 +5,12 @@
 {{- $existing := (lookup "v1" "Secret" $app.namespace "keycloak-secrets").data | default dict }}
 {{- $dbPassword := (get $existing "DB_PASSWORD" | b64dec) | default (randAlphaNum 32) }}
 {{- $adminPassword := (get $existing "KC_BOOTSTRAP_ADMIN_PASSWORD" | b64dec) | default (randAlphaNum 32) }}
-{{- $existingClients := (lookup "v1" "Secret" $app.namespace "oidc-clients").data | default dict }}
 {{- /* One OIDC client per app in sso.clients, named after its route host (https://<host>.<tailnet>). */}}
 {{- $clients := list }}
 {{- range $key := $app.sso.clients }}
 {{- $target := index $.Values.apps $key }}
 {{- $env := printf "CLIENT_SECRET_%s" ($key | snakecase | upper) }}
-{{- $clients = append $clients (dict "key" $key "host" $target.route.host "env" $env "secret" ((get $existingClients $env | b64dec) | default (randAlphaNum 40))) }}
+{{- $clients = append $clients (dict "key" $key "host" $target.route.host "env" $env "secret" (include "homelab.oidcClientSecret" (list $ $key))) }}
 {{- end }}
 apiVersion: v1
 kind: Secret

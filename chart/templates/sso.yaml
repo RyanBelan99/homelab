@@ -1,0 +1,155 @@
+{{/*
+Single sign-on in front of each app in keycloak.sso.protect: an oauth2-proxy and a
+Traefik forward-auth middleware in the app's own namespace (Traefik here does not
+allow cross-namespace references). routes.yaml attaches the middlewares to the app's
+route; /oauth2/ on the same host goes straight to the proxy for the sign-in callback.
+*/}}
+{{- with .Values.apps.keycloak }}
+{{- $kc := . }}
+{{- $tailnet := $.Values.secrets.tailnet }}
+{{- $issuer := printf "https://%s.%s/realms/homelab" $kc.route.host $tailnet }}
+{{- $internal := printf "http://keycloak.%s:8080/realms/homelab/protocol/openid-connect" $kc.namespace }}
+{{- range $key := $kc.sso.protect }}
+{{- $app := index $.Values.apps $key }}
+{{- $host := $app.route.host }}
+{{- $name := printf "oauth2-proxy-%s" $host }}
+{{- $url := printf "https://%s.%s" $host $tailnet }}
+{{- $stored := (lookup "v1" "Secret" $app.namespace $name).data | default dict }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  namespace: {{ $app.namespace }}
+type: Opaque
+stringData:
+  OAUTH2_PROXY_CLIENT_SECRET: {{ include "homelab.oidcClientSecret" (list $ $key) | quote }}
+  OAUTH2_PROXY_COOKIE_SECRET: {{ (get $stored "OAUTH2_PROXY_COOKIE_SECRET" | b64dec) | default (randAlphaNum 32) | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $app.namespace }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+    spec:
+      {{- include "homelab.nodeSelector" (list $ "worker") | nindent 6 }}
+      containers:
+        - name: oauth2-proxy
+          image: {{ $kc.oauth2ProxyImage }}
+          envFrom:
+            - secretRef:
+                name: {{ $name }}
+          args:
+            - --http-address=0.0.0.0:4180
+            - --provider=keycloak-oidc
+            - --provider-display-name=Homelab
+            - --client-id={{ $host }}
+            # Browsers sign in at the tailnet name; the proxy redeems and verifies tokens
+            # in-cluster, since the pod is not on the tailnet.
+            - --oidc-issuer-url={{ $issuer }}
+            - --skip-oidc-discovery=true
+            - --login-url={{ $issuer }}/protocol/openid-connect/auth
+            - --redeem-url={{ $internal }}/token
+            - --oidc-jwks-url={{ $internal }}/certs
+            - --validate-url={{ $internal }}/userinfo
+            - --redirect-url={{ $url }}/oauth2/callback
+            - --whitelist-domain={{ $host }}.{{ $tailnet }}
+            # Groups come from the client's own mapper, so no extra "groups" scope.
+            - --scope=openid email profile
+            - --code-challenge-method=S256
+            - --allowed-group=admins
+            - --email-domain=*
+            - --reverse-proxy=true
+            - --trusted-proxy-ip={{ $.Values.network.podCIDR }}
+            - --set-xauthrequest=true
+            - --skip-provider-button=true
+            - --upstream=static://202
+            - --cookie-name=_oauth2_{{ $host }}
+            - --cookie-secure=true
+          ports:
+            - name: http
+              containerPort: 4180
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            periodSeconds: 60
+          resources:
+            requests:
+              cpu: 10m
+              memory: 24Mi
+            limits:
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $app.namespace }}
+spec:
+  selector:
+    app: {{ $name }}
+  ports:
+    - name: http
+      port: 4180
+      targetPort: 4180
+---
+# Requests to the app arrive over HTTPS at tailscale serve; say so before auth runs.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: forwarded-https-{{ $host }}
+  namespace: {{ $app.namespace }}
+spec:
+  headers:
+    customRequestHeaders:
+      X-Forwarded-Proto: https
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: sso-{{ $host }}
+  namespace: {{ $app.namespace }}
+spec:
+  forwardAuth:
+    address: http://{{ $name }}.{{ $app.namespace }}.svc.cluster.local:4180/
+    trustForwardHeader: true
+    authResponseHeaders:
+      - X-Auth-Request-User
+      - X-Auth-Request-Email
+      - X-Auth-Request-Preferred-Username
+      - X-Auth-Request-Groups
+---
+# The sign-in callback and sign-out live on the app's own host.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $key }}-oauth2
+  namespace: {{ $app.namespace }}
+spec:
+  entryPoints: [web]
+  routes:
+    - match: 'HostRegexp(`^{{ $host }}\..+\.ts\.net$`) && PathPrefix(`/oauth2/`)'
+      kind: Rule
+      middlewares:
+        - name: forwarded-https-{{ $host }}
+      services:
+        - name: {{ $name }}
+          port: 4180
+{{- end }}
+{{- end }}
