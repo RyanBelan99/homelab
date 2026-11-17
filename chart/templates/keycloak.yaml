@@ -1,0 +1,197 @@
+{{- with .Values.apps.keycloak }}
+{{- $app := . }}
+{{- $tailnet := $.Values.secrets.tailnet }}
+{{- /* Generated once, then kept across upgrades: no password lives in the repo or secrets.yaml. */}}
+{{- $existing := (lookup "v1" "Secret" $app.namespace "keycloak-secrets").data | default dict }}
+{{- $dbPassword := (get $existing "DB_PASSWORD" | b64dec) | default (randAlphaNum 32) }}
+{{- $adminPassword := (get $existing "KC_BOOTSTRAP_ADMIN_PASSWORD" | b64dec) | default (randAlphaNum 32) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-secrets
+  namespace: {{ $app.namespace }}
+  {{- include "homelab.keepAnnotation" $ | nindent 2 }}
+type: Opaque
+stringData:
+  DB_PASSWORD: {{ $dbPassword | quote }}
+  # Temporary admin: sign in once, create your own admin user, then delete this one.
+  KC_BOOTSTRAP_ADMIN_USERNAME: bootstrap-admin
+  KC_BOOTSTRAP_ADMIN_PASSWORD: {{ $adminPassword | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak-db
+  namespace: {{ $app.namespace }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: keycloak-db
+  template:
+    metadata:
+      labels:
+        app: keycloak-db
+    spec:
+      {{- include "homelab.nodeSelector" (list $ $app.node) | nindent 6 }}
+      containers:
+        - name: postgres
+          image: {{ $app.postgresImage }}
+          env:
+            {{- include "homelab.tz" $ | nindent 12 }}
+            - name: POSTGRES_DB
+              value: keycloak
+            - name: POSTGRES_USER
+              value: keycloak
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: keycloak-secrets, key: DB_PASSWORD}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "keycloak", "-d", "keycloak"]
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          hostPath:
+            path: {{ $.Values.paths.config }}/keycloak/postgres
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-db
+  namespace: {{ $app.namespace }}
+spec:
+  selector:
+    app: keycloak-db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: {{ $app.namespace }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      {{- include "homelab.nodeSelector" (list $ $app.node) | nindent 6 }}
+      # Keycloak exits if the database is not up yet; wait instead of crash-looping.
+      initContainers:
+        - name: wait-for-db
+          image: {{ $app.postgresImage }}
+          command: ["sh", "-c", "until pg_isready -h keycloak-db -U keycloak -d keycloak; do sleep 2; done"]
+      containers:
+        - name: keycloak
+          image: {{ $app.image }}
+          args: ["start"]
+          env:
+            {{- include "homelab.tz" $ | nindent 12 }}
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL
+              value: jdbc:postgresql://keycloak-db:5432/keycloak
+            - name: KC_DB_USERNAME
+              value: keycloak
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: keycloak-secrets, key: DB_PASSWORD}
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef: {name: keycloak-secrets, key: KC_BOOTSTRAP_ADMIN_USERNAME}
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: keycloak-secrets, key: KC_BOOTSTRAP_ADMIN_PASSWORD}
+            # Browsers use the tailnet HTTPS name (TLS ends at tailscale serve); in-cluster
+            # clients such as oauth2-proxy use http://keycloak.{{ $app.namespace }}:8080.
+            - name: KC_HOSTNAME
+              value: https://{{ $app.route.host }}.{{ $tailnet }}
+            - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
+              value: "true"
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+          startupProbe:
+            httpGet:
+              path: /health/started
+              port: management
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: management
+            periodSeconds: 60
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 1536Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: {{ $app.namespace }}
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+# The route is tailnet-only and tailscale serve always terminates HTTPS, so tell
+# Keycloak the original scheme; otherwise it rejects sign-ins as "HTTPS required".
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: forwarded-https
+  namespace: {{ $app.namespace }}
+spec:
+  headers:
+    customRequestHeaders:
+      X-Forwarded-Proto: https
+{{- end }}

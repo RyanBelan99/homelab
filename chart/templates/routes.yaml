@@ -16,6 +16,10 @@ spec:
   routes:
     - match: '{{ if $lan }}Host(`{{ .host }}.{{ $.Values.network.localDomain }}`) || {{ end }}HostRegexp(`^{{ .host }}\..+\.ts\.net$`)'
       kind: Rule
+      {{- with .middlewares }}
+      middlewares:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       services:
         - name: {{ .service }}
           port: {{ .port }}

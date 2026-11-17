@@ -206,11 +206,29 @@ apps:
     title: CentralPI
     route: {host: home, service: homepage, port: 3000, lan: false}
 
+  # Sign-in (OIDC) for the admin apps. Tailnet only; never on Funnel.
+  keycloak:
+    namespace: auth
+    node: worker
+    image: quay.io/keycloak/keycloak:26.8.1
+    postgresImage: postgres:18.7-alpine
+    route:
+      host: auth
+      service: keycloak
+      port: 8080
+      lan: false
+      middlewares: [{name: forwarded-https, namespace: auth}]
+    dashboard:
+      title: Keycloak
+      icon: keycloak.svg
+      description: Sign-in for the admin apps
+      podSelector: app=keycloak
+
 # Homepage layout: groups and tile order. A tile is an app key above or an extra below.
 dashboard:
   groups:
     - {name: Infrastructure, columns: 3, tiles: [pihole, samba]}
-    - {name: Cluster, columns: 4, tiles: [traefik, coredns, protonExit, metricsServer]}
+    - {name: Cluster, columns: 4, tiles: [traefik, coredns, protonExit, metricsServer, keycloak]}
     - {name: Media, columns: 3, tiles: [jellyfin, seerr, dispatcharr]}
     - {name: Automation, columns: 4, tiles: [radarr, sonarr, prowlarr, qbittorrent]}
   extras:
