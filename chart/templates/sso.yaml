@@ -76,6 +76,10 @@ spec:
             - --upstream=static://202
             - --cookie-name=_oauth2_{{ $host }}
             - --cookie-secure=true
+            # A first visit fires several requests (page, favicon) that each start a
+            # sign-in; one CSRF cookie per attempt keeps them from overwriting each other.
+            - --cookie-csrf-per-request=true
+            - --cookie-csrf-expire=5m
           ports:
             - name: http
               containerPort: 4180
