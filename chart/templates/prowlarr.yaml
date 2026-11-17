@@ -35,6 +35,41 @@ spec:
           (dict "name" "FIREWALL_OUTBOUND_SUBNETS" "value" (printf "%s,%s,%s" $n.lanCIDR $n.podCIDR $n.serviceCIDR))
           (dict "name" "DNS_UPSTREAM_RESOLVERS" "value" "cloudflare,quad9")
         )) | nindent 8 }}
+        # FlareSolverr-compatible solver for Cloudflare-protected indexers (Prowlarr's
+        # "FlareSolverr" proxy at 127.0.0.1:8191). A native sidecar, so Prowlarr starts only
+        # once it listens; as a plain container, Prowlarr's first requests after every
+        # restart hit "connection refused" while the browser was still booting.
+        - name: cf-solver
+          image: {{ $app.flaresolverrImage }}
+          restartPolicy: Always
+          env:
+            - name: LOG_LEVEL
+              value: "info"
+            {{- include "homelab.tz" . | nindent 12 }}
+            - name: SESSION_CACHE_DRIVER
+              value: memory
+            - name: BROWSER_POOL_SIZE
+              value: "1"
+            - name: BROWSER_MAX_CONTENT_PROCESSES
+              value: "2"
+            - name: BROWSER_HARDWARE_CONCURRENCY
+              value: "4"
+          ports:
+            - containerPort: 8191
+          startupProbe:
+            tcpSocket:
+              port: 8191
+            periodSeconds: 5
+            failureThreshold: 60
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
       containers:
         - name: prowlarr
           image: {{ $app.image }}
@@ -51,31 +86,6 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /config
-        - name: flaresolverr
-          image: {{ $app.flaresolverrImage }}
-          env:
-            - name: LOG_LEVEL
-              value: "info"
-            {{- include "homelab.tz" . | nindent 12 }}
-            - name: SESSION_CACHE_DRIVER
-              value: memory
-            - name: BROWSER_POOL_SIZE
-              value: "1"
-            - name: BROWSER_MAX_CONTENT_PROCESSES
-              value: "2"
-            - name: BROWSER_HARDWARE_CONCURRENCY
-              value: "4"
-          ports:
-            - containerPort: 8191
-          resources:
-            requests:
-              cpu: 100m
-              memory: 512Mi
-            limits:
-              memory: 2Gi
-          volumeMounts:
-            - name: dshm
-              mountPath: /dev/shm
       volumes:
         {{- include "homelab.configVolume" (list . "config" "prowlarr") | nindent 8 }}
         {{- include "homelab.tunVolume" . | nindent 8 }}
