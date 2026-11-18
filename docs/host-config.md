@@ -37,6 +37,7 @@ adding an app (publishes its Tailscale Service).
 - The `crowdsec` middleware runs first on the public routes only. Home LAN, pods and the tailnet (`apps.crowdsec.trusted`) are never checked or banned.
 - Fail-open (`updateMaxFailure: -1`): if LAPI is down, Traefik keeps enforcing the last ban list it pulled.
 - Traefik downloads the bouncer plugin from GitHub when it starts; if that fails, the public names return 404 until Traefik restarts (LAN and tailnet routes are unaffected).
+- After a node reboot an agent pod comes back with its old name and can't re-register ("user already exist", [helm-charts#252](https://github.com/crowdsecurity/helm-charts/issues/252)). The `crowdsec-agent-watchdog` CronJob deletes any agent whose registration has failed 3 times, every 5 minutes, so it returns under a new name; LAPI deletes registrations unused for 7 days. By hand: `kubectl -n crowdsec delete pod -l type=agent`.
 - Seerr v3 logs "Failed sign-in attempt", which the hub's Jellyseerr parser doesn't know; `homelab/seerr-logs` in `crowdsec.yaml` covers it.
 - Homepage's CrowdSec widget signs in as the machine `homepage`, with the password the chart keeps in `homepage-widgets`. The machine lives in LAPI's database, so after a fresh CrowdSec install register it again:
   `kubectl -n dashboard get secret homepage-widgets -o jsonpath='{.data.HOMEPAGE_VAR_CROWDSEC_PASSWORD}' | base64 -d | kubectl -n crowdsec exec -i deploy/crowdsec-lapi -- sh -c 'cscli machines add homepage --password "$(cat)" --force -f /dev/null'`

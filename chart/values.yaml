@@ -94,6 +94,8 @@ apps:
     node: server
     chartVersion: 0.24.3
     bouncerPlugin: v1.8.2
+    # kubectl with a shell, for the agent watchdog (crowdsec.yaml).
+    watchdogImage: alpine/k8s:1.36.2
     collections: [crowdsecurity/traefik, LePresidente/jellyfin, LePresidente/jellyseerr]
     # Never ban: home LAN, pods, and the tailnet (Tailscale's 100.64.0.0/10).
     trusted: [192.168.0.0/24, 10.42.0.0/16, 100.64.0.0/10]

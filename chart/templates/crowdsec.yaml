@@ -100,6 +100,20 @@ spec:
         limits:
           memory: 256Mi
     config:
+      # Replaces the chart's default: self-registration only from localhost and the pod
+      # network, and registrations unused for 7 days are deleted (agent pods that were
+      # replaced, for example after a reboot, leave their old name behind).
+      config.yaml.local: |
+        api:
+          server:
+            auto_registration:
+              enabled: true
+              token: "${REGISTRATION_TOKEN}"
+              allowed_ranges: ["127.0.0.1/32", "{{ .Values.network.podCIDR }}"]
+        db_config:
+          flush:
+            agents_autodelete:
+              login_password: 168h
       parsers:
         s01-parse:
           # The hub's LePresidente/jellyseerr-logs only knows "Failed login attempt"; Seerr v3
@@ -137,6 +151,82 @@ spec:
             whitelist:
               reason: "homelab trusted networks"
               cidr: {{ toJson $app.trusted }}
+---
+# After a node reboot a DaemonSet pod comes back with the same name, and the chart's
+# registration step fails with "user already exist" forever
+# (https://github.com/crowdsecurity/helm-charts/issues/252). Deleting the pod gives it a
+# new name, which registers fine: do that for any agent whose registration keeps failing.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: crowdsec-agent-watchdog
+  namespace: {{ $app.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: crowdsec-agent-watchdog
+  namespace: {{ $app.namespace }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: crowdsec-agent-watchdog
+  namespace: {{ $app.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: crowdsec-agent-watchdog
+subjects:
+  - kind: ServiceAccount
+    name: crowdsec-agent-watchdog
+    namespace: {{ $app.namespace }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: crowdsec-agent-watchdog
+  namespace: {{ $app.namespace }}
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 0
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 120
+      ttlSecondsAfterFinished: 300
+      template:
+        spec:
+          serviceAccountName: crowdsec-agent-watchdog
+          restartPolicy: Never
+          {{- include "homelab.nodeSelector" (list . "worker") | nindent 10 }}
+          containers:
+            - name: watchdog
+              image: {{ $app.watchdogImage }}
+              command:
+                - sh
+                - -c
+                - |
+                  kubectl -n {{ $app.namespace }} get pods -l type=agent \
+                    -o jsonpath='{range .items[*]}{.metadata.name} {.status.initContainerStatuses[0].restartCount}{"\n"}{end}' |
+                  while read -r pod restarts; do
+                    if [ "${restarts:-0}" -ge 3 ]; then
+                      echo "deleting $pod: registration failed $restarts times"
+                      kubectl -n {{ $app.namespace }} delete pod "$pod" --wait=false
+                    fi
+                  done
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 128Mi
 {{- /* The bouncer middleware and its key, in every namespace with a public app. */}}
 {{- $namespaces := dict }}
 {{- range .Values.apps }}{{ if .public }}{{ $_ := set $namespaces .namespace true }}{{ end }}{{ end }}
