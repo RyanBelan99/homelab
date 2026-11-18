@@ -7,7 +7,7 @@ so admin apps turn it off and stay reachable only through the tailnet. */}}
 {{- if hasKey . "lan" }}{{ $lan = .lan }}{{ end }}
 {{- $middlewares := .middlewares | default list }}
 {{- if has $name ($.Values.apps.keycloak.sso.protect | default list) }}
-{{- $middlewares = concat $middlewares (list (dict "name" (printf "forwarded-https-%s" .host)) (dict "name" (printf "sso-%s" .host))) }}
+{{- $middlewares = concat $middlewares (list (dict "name" "sso-https") (dict "name" "sso")) }}
 {{- end }}
 ---
 apiVersion: traefik.io/v1alpha1

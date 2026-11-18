@@ -2,7 +2,8 @@
 // Roles come from the console's Users page: admins are autogroup:admin, everyone else a member.
 {
 	"hosts": {
-		"pihole-dns": "192.168.0.34",
+		"pihole-dns":  "192.168.0.34",
+		"traefik-lan": "192.168.0.34",
 	},
 
 	"tagOwners": {
@@ -30,17 +31,13 @@
 		},
 	},
 
-	// Funnel (public HTTPS) for the operator's proxies, which carry tag:k8s.
-	// Only an Ingress annotated tailscale.com/funnel: "true" is public: today, Jellyfin.
-	"nodeAttrs": [
-		{"target": ["tag:k8s"], "attr": ["funnel"]},
-	],
-
 	"grants": [
 		// Members: own devices, Jellyfin and Seerr, Pi-hole DNS, and the ProtonVPN exit node.
 		{"src": ["autogroup:member"], "dst": ["autogroup:self"], "ip": ["*"]},
 		{"src": ["autogroup:member"], "dst": ["svc:jellyfin", "svc:seerr"], "ip": ["tcp:443"]},
 		{"src": ["autogroup:member"], "dst": ["pihole-dns"], "ip": ["tcp:53", "udp:53"]},
+		// Members: the public name over the subnet route (Pi-hole answers it with the LAN IP).
+		{"src": ["autogroup:member"], "dst": ["traefik-lan"], "ip": ["tcp:443"]},
 		{"src": ["autogroup:member"], "dst": ["autogroup:internet"], "ip": ["*"], "via": ["tag:exit-proton"]},
 
 		// Admins: every app.

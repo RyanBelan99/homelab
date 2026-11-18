@@ -26,6 +26,10 @@
   value: {{ .Values.admin.gid | quote }}
 - name: DISPATCHARR_ENV
   value: modular
+# Traefik's range: real client IPs, and Settings > Reverse Proxy Auth may trust the
+# X-Auth-Request-* headers the shared oauth2-proxy sets (Traefik overwrites any sent by clients).
+- name: DISPATCHARR_TRUSTED_PROXIES
+  value: {{ .Values.network.serverPodCIDR | quote }}
 {{- end }}
 # Live TV for Jellyfin: web, celery, PostgreSQL and Redis in one pod over localhost.
 # Separate official Redis because the all-in-one image's jemalloc fails on 16 KiB pages.

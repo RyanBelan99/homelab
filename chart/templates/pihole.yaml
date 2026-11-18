@@ -76,8 +76,12 @@ spec:
             # Set here, not in the web UI: env wins on every restart.
             - name: FTLCONF_dns_upstreams
               value: 127.0.0.1#5053
+            # Keep the admin login (no trusted-header sign-in in Pi-hole), but for 30 days.
+            - name: FTLCONF_webserver_session_timeout
+              value: "2592000"
             - name: FTLCONF_misc_dnsmasq_lines
-              value: address=/{{ .Values.network.localDomain }}/{{ .Values.nodes.server.ip }}
+              # Split DNS: at home the public name goes straight to Traefik on the LAN.
+              value: address=/{{ .Values.network.localDomain }}/{{ .Values.nodes.server.ip }}{{ if .Values.public.enabled }};address=/{{ .Values.secrets.publicDomain }}/{{ .Values.nodes.server.ip }}{{ end }}
           ports:
             - name: dns-tcp
               containerPort: 53

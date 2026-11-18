@@ -25,7 +25,7 @@ stringData:
   KC_BOOTSTRAP_ADMIN_USERNAME: bootstrap-admin
   KC_BOOTSTRAP_ADMIN_PASSWORD: {{ $adminPassword | quote }}
 ---
-# OIDC client secrets, shared by Keycloak (realm import) and each app's oauth2-proxy.
+# OIDC client secrets, shared by Keycloak (realm import) and the shared oauth2-proxy.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -92,73 +92,6 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: keycloak-db
-  namespace: {{ $app.namespace }}
-spec:
-  replicas: 1
-  revisionHistoryLimit: 3
-  strategy:
-    type: Recreate
-  selector:
-    matchLabels:
-      app: keycloak-db
-  template:
-    metadata:
-      labels:
-        app: keycloak-db
-    spec:
-      {{- include "homelab.nodeSelector" (list $ $app.node) | nindent 6 }}
-      containers:
-        - name: postgres
-          image: {{ $app.postgresImage }}
-          env:
-            {{- include "homelab.tz" $ | nindent 12 }}
-            - name: POSTGRES_DB
-              value: keycloak
-            - name: POSTGRES_USER
-              value: keycloak
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef: {name: keycloak-secrets, key: DB_PASSWORD}
-            - name: PGDATA
-              value: /var/lib/postgresql/data/pgdata
-          ports:
-            - containerPort: 5432
-          readinessProbe:
-            exec:
-              command: ["pg_isready", "-U", "keycloak", "-d", "keycloak"]
-            periodSeconds: 10
-          resources:
-            requests:
-              cpu: 50m
-              memory: 128Mi
-            limits:
-              memory: 512Mi
-          volumeMounts:
-            - name: data
-              mountPath: /var/lib/postgresql/data
-      volumes:
-        - name: data
-          hostPath:
-            path: {{ $.Values.paths.config }}/keycloak/postgres
-            type: DirectoryOrCreate
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: keycloak-db
-  namespace: {{ $app.namespace }}
-spec:
-  selector:
-    app: keycloak-db
-  ports:
-    - name: postgres
-      port: 5432
-      targetPort: 5432
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
   name: keycloak
   namespace: {{ $app.namespace }}
 spec:
@@ -175,11 +108,42 @@ spec:
         app: keycloak
     spec:
       {{- include "homelab.nodeSelector" (list $ $app.node) | nindent 6 }}
-      # Keycloak exits if the database is not up yet; wait instead of crash-looping.
+      # Postgres runs as a native sidecar: it starts before Keycloak (which exits without a
+      # database), keeps running beside it, and stops after it. Recreate (above) keeps a
+      # single Postgres on the data directory.
       initContainers:
-        - name: wait-for-db
+        - name: postgres
           image: {{ $app.postgresImage }}
-          command: ["sh", "-c", "until pg_isready -h keycloak-db -U keycloak -d keycloak; do sleep 2; done"]
+          restartPolicy: Always
+          env:
+            {{- include "homelab.tz" $ | nindent 12 }}
+            - name: POSTGRES_DB
+              value: keycloak
+            - name: POSTGRES_USER
+              value: keycloak
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: keycloak-secrets, key: DB_PASSWORD}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "keycloak", "-d", "keycloak"]
+            periodSeconds: 2
+            failureThreshold: 90
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "keycloak", "-d", "keycloak"]
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: db
+              mountPath: /var/lib/postgresql/data
       containers:
         - name: keycloak
           image: {{ $app.image }}
@@ -192,7 +156,7 @@ spec:
             - name: KC_DB
               value: postgres
             - name: KC_DB_URL
-              value: jdbc:postgresql://keycloak-db:5432/keycloak
+              value: jdbc:postgresql://127.0.0.1:5432/keycloak
             - name: KC_DB_USERNAME
               value: keycloak
             - name: KC_DB_PASSWORD
@@ -251,6 +215,10 @@ spec:
         - name: realm
           configMap:
             name: keycloak-realm
+        - name: db
+          hostPath:
+            path: {{ $.Values.paths.config }}/keycloak/postgres
+            type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: Service

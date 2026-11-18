@@ -62,25 +62,3 @@ spec:
     - name: web
       port: 8096
       targetPort: 8096
-{{- with $app.funnel }}
----
-# Public HTTPS at <host>.<tailnet>.ts.net through Tailscale Funnel (needs the
-# funnel nodeAttr for tag:k8s in docs/tailscale-policy.hujson). Goes straight to
-# Jellyfin, not through Traefik; Jellyfin's own login is the only gate.
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: jellyfin-funnel
-  namespace: {{ $app.namespace }}
-  annotations:
-    tailscale.com/funnel: "true"
-spec:
-  ingressClassName: tailscale
-  defaultBackend:
-    service:
-      name: jellyfin
-      port:
-        number: 8096
-  tls:
-    - hosts: [{{ .host }}]
-{{- end }}

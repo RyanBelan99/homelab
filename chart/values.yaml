@@ -13,6 +13,9 @@ network:
   lanCIDR: 192.168.0.0/24
   podCIDR: 10.42.0.0/16
   podGateway: 10.42.0.1
+  # The server's pod range, where Traefik runs (kubectl get node <server> -o jsonpath='{.spec.podCIDR}').
+  # Apps that trust Traefik's sign-in headers trust this range.
+  serverPodCIDR: 10.42.0.0/24
   serviceCIDR: 10.43.0.0/16
   localDomain: home.arpa
 
@@ -29,6 +32,18 @@ paths:
   data: /mnt/data
   nasShare: /home/rbelan/shared/nas
 
+# Public HTTPS on secrets.publicDomain (a free dynamic-DNS name). The router forwards TCP 443
+# to the server; Pi-hole answers the name (and its sub-names) with the server's LAN IP at home.
+# Apps opt in with public: {host, loginPath}: host "" is the bare name, otherwise <host>.<name>.
+# One certificate covers every public name.
+public:
+  enabled: true
+  # DNS host for the name: duckdns or desec (both lego and ddns-updater provider codes).
+  provider: duckdns
+  # le-staging until the first certificate works, then le (Let's Encrypt rate limits).
+  certResolver: le
+  ddnsUpdaterImage: qmcgaw/ddns-updater:v2.10.0
+
 # Every app: where it runs, what it runs, and how it is reached.
 #   route.host       <host>.<localDomain> on the LAN, <host>.<tailnet> as a Tailscale Service
 #   route.lan        false = tailnet only (the LAN path skips the Tailscale policy); admin apps set it
@@ -42,6 +57,7 @@ apps:
     route: {host: pihole, service: pihole-web, port: 80, lan: false}
     dashboard:
       title: Pi-hole
+      sidecars: [unbound]
       icon: pi-hole.svg
       description: DNS + ad blocking
       path: /admin/
@@ -68,14 +84,46 @@ apps:
     dashboard:
       title: Traefik
       icon: traefik.svg
-      description: "Front door on :80 ({{ .Values.nodes.server.name }})"
+      description: "Front door: LAN, tailnet and public HTTPS ({{ .Values.nodes.server.name }})"
       podSelector: app.kubernetes.io/name=traefik
+
+  # Reads Traefik, Jellyfin and Seerr logs, bans attackers; Traefik's bouncer plugin blocks
+  # them on the public routes. LAPI (the ban list) on the server, an agent on every node.
+  crowdsec:
+    namespace: crowdsec
+    node: server
+    chartVersion: 0.24.3
+    bouncerPlugin: v1.8.2
+    collections: [crowdsecurity/traefik, LePresidente/jellyfin, LePresidente/jellyseerr]
+    # Never ban: home LAN, pods, and the tailnet (Tailscale's 100.64.0.0/10).
+    trusted: [192.168.0.0/24, 10.42.0.0/16, 100.64.0.0/10]
+    # If the bouncer can't reach LAPI: -1 keeps serving with the last ban list it has
+    # (fail open); N blocks every public request after N missed 60 s syncs (fail closed).
+    updateMaxFailure: -1
+    dashboard:
+      title: CrowdSec
+      icon: crowdsec.svg
+      href: https://app.crowdsec.net
+      description: "Ban list (LAPI) on {{ .Values.nodes.server.name }}, community blocklist"
+      podSelector: k8s-app=crowdsec,type=lapi
+      # Alerts and bans from the last 24 h, as the "homepage" machine (see docs/host-config.md).
+      widget:
+        type: crowdsec
+        url: http://crowdsec-service.crowdsec.svc.cluster.local:8080
+        username: homepage
+        passwordVar: CROWDSEC_PASSWORD
 
   tailscaleOperator:
     namespace: tailscale
     node: server
     chartVersion: 1.104.4
     hostname: tailscale-operator
+    dashboard:
+      title: Tailscale operator
+      icon: tailscale.svg
+      href: https://login.tailscale.com/admin/machines
+      description: kubectl through the tailnet
+      podSelector: app=operator
 
   protonExit:
     namespace: vpn-exit
@@ -89,6 +137,7 @@ apps:
       title: proton-exit
       icon: proton-vpn.svg
       description: Tailscale exit node via ProtonVPN
+      sidecars: [gluetun]
       podSelector: app=proton-exit
 
   jellyfin:
@@ -96,8 +145,8 @@ apps:
     node: worker
     image: jellyfin/jellyfin:latest
     route: {host: jellyfin, service: jellyfin, port: 8096}
-    # Public through Tailscale Funnel; remove to make Jellyfin tailnet/LAN-only again.
-    funnel: {host: watch}
+    # Public HTTPS at secrets.publicDomain (see public: above); loginPath gets a stricter rate limit.
+    public: {host: "", loginPath: "(?i)^/Users/AuthenticateByName$"}
     dashboard:
       title: Jellyfin
       icon: jellyfin.svg
@@ -117,6 +166,8 @@ apps:
     node: worker
     image: ghcr.io/seerr-team/seerr:v3.5.1
     route: {host: seerr, service: seerr, port: 5055}
+    # Public at seerr.<publicDomain>; sign-in is with Jellyfin accounts.
+    public: {host: seerr, loginPath: "(?i)^/api/v1/auth/(jellyfin|local)$"}
     dashboard:
       title: Seerr
       icon: seerr.svg
@@ -131,6 +182,7 @@ apps:
     route: {host: dispatcharr, service: dispatcharr, port: 9191, lan: false}
     dashboard:
       title: Dispatcharr
+      sidecars: [celery, postgres, redis]
       icon: dispatcharr.png
       description: Live TV channels for Jellyfin
 
@@ -180,6 +232,7 @@ apps:
     route: {host: prowlarr, service: prowlarr, port: 9696, lan: false}
     dashboard:
       title: Prowlarr
+      sidecars: [gluetun, cf-solver]
       icon: prowlarr.svg
       description: Indexers (via VPN)
       widget:
@@ -196,6 +249,7 @@ apps:
     route: {host: qbit, service: qbittorrent, port: 8080, lan: false}
     dashboard:
       title: qBittorrent
+      sidecars: [gluetun]
       icon: qbittorrent.svg
       description: Downloads (via VPN)
 
@@ -206,13 +260,15 @@ apps:
     title: CentralPI
     route: {host: home, service: homepage, port: 3000, lan: false}
 
-  # Sign-in (OIDC) for the admin apps. Tailnet only; never on Funnel.
+  # Sign-in (OIDC) for the admin apps. Tailnet only; never public.
   keycloak:
     namespace: auth
     node: worker
     image: quay.io/keycloak/keycloak:26.8.1
     postgresImage: postgres:18.7-alpine
     oauth2ProxyImage: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
+    # Session store for the shared oauth2-proxy (same official image Dispatcharr runs on 16 KiB pages).
+    redisImage: redis:8.8.4-trixie
     route:
       host: auth
       service: keycloak
@@ -220,13 +276,17 @@ apps:
       lan: false
       middlewares: [{name: forwarded-https, namespace: auth}]
     sso:
+      # The one OIDC client the shared oauth2-proxy uses; sign-in completes on this app's
+      # host, the redirect URI the client allows.
+      client: homepage
       # OIDC clients in the homelab realm. Imported only when the realm is first
       # created; a client added here later must also be added in the console.
-      clients: [homepage, prowlarr, radarr, sonarr, qbittorrent, pihole, dispatcharr]
-      # Apps behind Keycloak sign-in (oauth2-proxy + forward auth, admins group only).
+      clients: [homepage]
+      # Apps behind Keycloak sign-in (one shared oauth2-proxy + forward auth, admins only).
       protect: [homepage, prowlarr, radarr, sonarr, qbittorrent, pihole, dispatcharr]
     dashboard:
       title: Keycloak
+      sidecars: [postgres]
       icon: keycloak.svg
       description: Sign-in for the admin apps
       podSelector: app=keycloak
@@ -234,11 +294,38 @@ apps:
 # Homepage layout: groups and tile order. A tile is an app key above or an extra below.
 dashboard:
   groups:
-    - {name: Infrastructure, columns: 3, tiles: [pihole, samba]}
-    - {name: Cluster, columns: 4, tiles: [traefik, coredns, protonExit, metricsServer, keycloak]}
+    - {name: Infrastructure, columns: 3, tiles: [pihole, samba, ddnsUpdater]}
+    - {name: Security, columns: 4, tiles: [keycloak, sso, crowdsec, crowdsecAgents]}
+    - {name: Cluster, columns: 3, tiles: [traefik, coredns, metricsServer, localPath, tailscaleOperator, protonExit]}
     - {name: Media, columns: 3, tiles: [jellyfin, seerr, dispatcharr]}
     - {name: Automation, columns: 4, tiles: [radarr, sonarr, prowlarr, qbittorrent]}
   extras:
+    sso:
+      title: Sign-in proxy
+      icon: mdi-shield-key
+      description: One oauth2-proxy for every admin app
+      sidecars: [redis]
+      namespace: auth
+      podSelector: app=oauth2-proxy
+    crowdsecAgents:
+      title: CrowdSec agents
+      icon: crowdsec.svg
+      description: Read Traefik, Jellyfin and Seerr logs (one per node)
+      namespace: crowdsec
+      podSelector: k8s-app=crowdsec,type=agent
+    ddnsUpdater:
+      title: DuckDNS updater
+      icon: mdi-web-sync
+      href: https://www.duckdns.org
+      description: Keeps the public name on the home IP
+      namespace: traefik
+      podSelector: app=ddns-updater
+    localPath:
+      title: local-path
+      icon: mdi-harddisk
+      description: Volumes for Pi-hole, Traefik and CrowdSec
+      namespace: kube-system
+      podSelector: app=local-path-provisioner
     coredns:
       title: CoreDNS
       icon: mdi-dns

@@ -84,19 +84,28 @@ data:
       {{- $label := $t.appLabel | default $key | kebabcase }}
         - {{ $t.title }}:
             icon: {{ $t.icon }}
-            {{- with $a.route }}
-            href: https://{{ .host }}.{{ $tailnet }}{{ $t.path | default "/" }}
+            {{- if $a.route }}
+            href: https://{{ $a.route.host }}.{{ $tailnet }}{{ $t.path | default "/" }}
+            {{- else if $t.href }}
+            href: {{ $t.href }}
             {{- end }}
-            description: {{ tpl $t.description $ }}
+            {{- /* Helper containers in the same pod, so the tile says what else runs with it. */}}
+            description: {{ printf "%s%s" (tpl $t.description $) (ternary (printf " · sidecars: %s" (join ", " ($t.sidecars | default list))) "" (not (empty $t.sidecars))) | quote }}
             namespace: {{ $a.namespace | default $t.namespace }}
             app: {{ $label }}
             podSelector: {{ $t.podSelector | default (printf "app=%s" $label) }}
             {{- with $t.widget }}
             widget:
-              {{- range $k, $v := omit . "keyVar" }}
+              {{- range $k, $v := omit . "keyVar" "passwordVar" }}
               {{ $k }}: {{ if kindIs "slice" $v }}[{{ join ", " $v }}]{{ else }}{{ $v }}{{ end }}
               {{- end }}
-              key: "{{ "{{" }}HOMEPAGE_VAR_{{ .keyVar }}{{ "}}" }}"
+              {{- /* Secrets stay in the homepage-widgets Secret; Homepage substitutes them. */}}
+              {{- with .keyVar }}
+              key: "{{ "{{" }}HOMEPAGE_VAR_{{ . }}{{ "}}" }}"
+              {{- end }}
+              {{- with .passwordVar }}
+              password: "{{ "{{" }}HOMEPAGE_VAR_{{ . }}{{ "}}" }}"
+              {{- end }}
             {{- end }}
       {{- end }}
     {{- end }}

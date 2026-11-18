@@ -18,6 +18,8 @@ SERVICE_CIDR=10.43.0.0/16
 IFACE=$(ip route show default | awk '{print $5; exit}')
 IP=$(ip -4 -o addr show dev "$IFACE" | awk '{print $4}' | cut -d/ -f1 | head -1)
 LAN=$(ip -4 route show dev "$IFACE" scope link proto kernel | awk '{print $1; exit}')
+# Kubernetes and Tailscale use the lowercase hostname (CentralPI -> centralpi).
+NODE=$(hostname | tr '[:upper:]' '[:lower:]')
 echo "== $(hostname): $IP on $IFACE, LAN $LAN, admin $ADMIN =="
 
 echo "== cgroup memory controller =="
@@ -66,7 +68,7 @@ if ! command -v k3s >/dev/null; then
 fi
 install -d -m 700 -o "$ADMIN" -g "$ADMIN" "/home/$ADMIN/.kube"
 install -m 600 -o "$ADMIN" -g "$ADMIN" /etc/rancher/k3s/k3s.yaml "/home/$ADMIN/.kube/config"
-k3s kubectl label node "$(hostname)" svccontroller.k3s.cattle.io/enablelb=true --overwrite
+k3s kubectl label node "$NODE" svccontroller.k3s.cattle.io/enablelb=true --overwrite
 
 echo "== firewall: LAN and VPN reach only ssh, smb, k3s API, DNS, Traefik =="
 for net in $LAN $VPN_CIDR; do
@@ -76,6 +78,8 @@ for net in $LAN $VPN_CIDR; do
   ufw allow from "$net" to any port 53 comment dns
   ufw allow from "$net" to any port 80 proto tcp comment traefik
 done
+# Public HTTPS (the router forwards 443 here); port 80 stays LAN-only.
+ufw allow 443/tcp comment 'traefik public https'
 ufw allow from "$POD_CIDR" comment 'k3s pods'
 ufw allow from "$SERVICE_CIDR" comment 'k3s services'
 ufw allow in on cni0 comment 'k3s pod bridge'
@@ -107,13 +111,17 @@ EOF
 chmod 755 /etc/NetworkManager/dispatcher.d/50-tailscale-gro
 ethtool -K "$IFACE" rx-udp-gro-forwarding on rx-gro-list off
 # First run prints a login URL here.
-tailscale up --hostname="$(hostname)" \
+# Every non-default setting must be restated, or tailscale up refuses to change anything.
+# --operator lets the admin user run tailscale serve without sudo.
+tailscale up --hostname="$NODE" --operator="$ADMIN" \
   --advertise-tags=tag:homelab --advertise-routes="$LAN" --advertise-exit-node \
   --snat-subnet-routes=false --accept-dns=false
 
 echo "== tailscale services: one per app route =="
 # shellcheck disable=SC2016  # literal backtick in Traefik's Host(`...`) / HostRegexp(`^...`) rules
-for host in $(k3s kubectl get ingressroute -A -o jsonpath='{.items[*].spec.routes[0].match}' 2>/dev/null \
+# Only routes on the LAN entrypoint (web); public routes on websecure are not tailnet Services.
+for host in $(k3s kubectl get ingressroute -A \
+    -o jsonpath='{range .items[?(@.spec.entryPoints[0]=="web")]}{.spec.routes[0].match}{"\n"}{end}' 2>/dev/null \
     | grep -oE 'Host(Regexp)?\(`\^?[a-z0-9-]+' | sed -E 's/.*`\^?//' | sort -u); do
   tailscale serve --service="svc:$host" --https=443 "http://$IP:80" \
     || echo "svc:$host: define it on the admin console's Services page, then re-run"
