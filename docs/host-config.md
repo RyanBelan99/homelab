@@ -5,7 +5,7 @@ their network, hostname and admin user, so they need no config, and both are saf
 
 | Script | Machine | Does |
 |---|---|---|
-| [`server.sh`](../scripts/server.sh) | Raspberry Pi (Raspberry Pi OS) | Headless and hardened, host DNS pinned off Pi-hole, k3s server, ufw, Tailscale subnet router + exit node, one Tailscale Service per app route |
+| [`server.sh`](../scripts/server.sh) | Raspberry Pi (Raspberry Pi OS or Ubuntu Server) | Headless and hardened, host DNS pinned off Pi-hole, k3s server, ufw, Tailscale subnet router + exit node, one Tailscale Service per app route |
 | [`worker.sh`](../scripts/worker.sh) | MacBook Pro M1 Pro (Fedora Asahi Server) | Laptop-as-server (charge limit, lid, no sleep), data folders, key-only SSH, security updates, k3s agent, power-loss alerts |
 
 Re-run `server.sh` after a worker joins (opens kubelet and flannel to it) and after
