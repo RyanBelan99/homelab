@@ -58,12 +58,23 @@ Re-apply them after wiping an app's config.
 | Seerr | Settings > General > Application URL | `https://seerr.<publicDomain>` | Links in emails and the app point at the public name |
 | Seerr | Settings > General > Enable Proxy Support | On | Trust Traefik's `X-Forwarded-For`, so Seerr logs real client IPs |
 | Seerr | Settings > Jellyfin > External URL | `https://<publicDomain>` | "Play on Jellyfin" opens the public name, which works everywhere |
-| qBittorrent | Web UI > Bypass authentication for clients in whitelisted IP subnets | On, `10.42.0.0/24` (`network.serverPodCIDR`) | Traefik's range, so Keycloak sign-in is the only login; Radarr and Sonarr (on the worker) still use the password. Re-check after Cilium or a node rebuild changes pod ranges |
 | Dispatcharr | Settings > Reverse Proxy Auth | On, header `X-Auth-Request-Preferred-Username` | Signs in the Dispatcharr user matching your Keycloak username; trusted only from `DISPATCHARR_TRUSTED_PROXIES` (set in the chart) |
-| qBittorrent | Speed > Global upload limit | 60 KiB/s | Seeding otherwise takes ~2 Mbps of the upload remote streams need |
+| SABnzbd | Config > Servers | Your Usenet provider, SSL on port 563, connections at or under the plan's limit | The provider's login lives here, not in the chart |
+| SABnzbd | Config > Folders | Temporary `/data/usenet/incomplete`, Completed `/data/usenet/complete` | Same `/data` mount as Radarr and Sonarr, so imports are a rename, not a copy |
+| SABnzbd | Config > Categories | `movies` and `tv`, both folder `Default` | Radarr and Sonarr each send their category and import only their own downloads |
+| SABnzbd | Config > Special > `host_whitelist` | `sabnzbd, sabnzbd.media.svc.cluster.local, sabnzbd.<tailnet>.ts.net` | SABnzbd refuses hostnames it doesn't know: Radarr and Sonarr use the cluster name, the browser the tailnet name |
+| SABnzbd | Config > General > Security | No username or password | Keycloak (forward auth) is the only sign-in; Radarr, Sonarr and Homepage use the API key |
+| SABnzbd | Config > Special > `local_ranges` | `10.42.0.0/16, 100.64.0.0/10` | SABnzbd checks the browser's IP in `X-Forwarded-For`, and tailnet IPs aren't private ranges; without this the tailnet name shows "Refused connection". The API can't set it: use the page, or edit `sabnzbd.ini` and restart the pod |
+| SABnzbd | Config > Servers > Articles per request | 8 | Newshosting answers in ~280 ms through the tunnel; pipelining keeps the connections busy |
+| Radarr, Sonarr | Settings > Download Clients | SABnzbd at `sabnzbd.media.svc.cluster.local:8080`, category `movies` (Radarr) or `tv` (Sonarr) | The only download client |
+| Prowlarr | Indexers | altHUB and NinjaCentral (Newznab), no torrent indexers, no indexer proxies | Prowlarr syncs them to Radarr and Sonarr; Usenet indexers use an API key, so no Cloudflare solver is needed |
+| Radarr, Sonarr | Settings > Profiles > HD-1080p | TRaSH tiers (WEB and Bluray groups); `x265 (HD)` custom format at -10000 | 1080p x265 is almost always a re-encode of a WEB-DL, and 10-bit HEVC makes some Jellyfin clients transcode. The format matches `[xh][ ._-]?265\|\bHEVC` in the title, except 2160p |
+| Radarr, Sonarr | Settings > Media Management | Import extra files `srt,ass,ssa,sub,idx`; delete empty folders on | Keeps subtitles that come as separate files; cleans up after upgrades |
 | Radarr, Sonarr, Prowlarr | Settings > General > Authentication | External | Keycloak (forward auth) is the only sign-in; the API still needs its key |
 | Keycloak | homelab realm > Users | Your user, in group `admins`, email verified | The realm import creates groups and clients, not users; the master realm is only for administering Keycloak |
 | Keycloak | Each app client > Dedicated scope > Full scope allowed | Off | Keeps sessions under oauth2-proxy's 4 KB cookie; a fresh realm import already sets it |
+
+SABnzbd's own Restart (page or API) can leave it stopped inside the linuxserver image (s6 doesn't bring back the re-spawned process); restart the pod instead: `kubectl -n media rollout restart deploy/sabnzbd`.
 
 At home, use `jellyfin.home.arpa`: tailnet clients are always remote, so `ts.net` gets the cap even on the LAN.
 

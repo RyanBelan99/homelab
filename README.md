@@ -12,7 +12,7 @@ file, one secrets file. Remote access is Tailscale only, with no open router por
 | Samba | Network file share |
 | Jellyfin | Media server, with free live TV via Dispatcharr |
 | Seerr | Request page for movies and shows |
-| Radarr, Sonarr, Prowlarr, qBittorrent | Media automation; downloads and indexers behind a VPN kill switch |
+| Radarr, Sonarr, Prowlarr, SABnzbd | Media automation; Usenet downloads and indexers behind a VPN kill switch |
 | Homepage | Dashboard with live pod status |
 | proton-exit | Tailscale exit node that leaves through ProtonVPN |
 | Tailscale operator | kubectl over the tailnet, authenticated by Tailscale identity |
@@ -55,11 +55,15 @@ helm upgrade --install homelab chart -f secrets/secrets.yaml -n homelab --create
 
 Change a node, IP, path, image or schedule in `chart/values.yaml` and run the same command.
 
-Preview a change before applying it:
+Preview a change before applying it (`--dry-run=server` lets the chart read the secrets it already
+stored, so generated passwords don't show as changes):
 
 ```bash
-helm template homelab chart -f secrets/secrets.yaml | kubectl diff -f -
+helm template homelab chart -f secrets/secrets.yaml -n homelab --dry-run=server | kubectl diff -f -
 ```
+
+`kubectl diff` can't show a removed container or volume (Helm sets no last-applied annotation);
+`helm upgrade ... --dry-run=server` validates those.
 
 ## 🔧 Rebuild from scratch
 

@@ -24,7 +24,7 @@
 			"svc:radarr":      ["tag:homelab"],
 			"svc:sonarr":      ["tag:homelab"],
 			"svc:prowlarr":    ["tag:homelab"],
-			"svc:qbit":        ["tag:homelab"],
+			"svc:sabnzbd":     ["tag:homelab"],
 			"svc:pihole":      ["tag:homelab"],
 			"svc:dispatcharr": ["tag:homelab"],
 			"svc:auth":        ["tag:homelab"],
@@ -43,7 +43,7 @@
 		// Admins: every app.
 		{
 			"src": ["autogroup:admin"],
-			"dst": ["svc:home", "svc:radarr", "svc:sonarr", "svc:prowlarr", "svc:qbit", "svc:pihole", "svc:dispatcharr", "svc:auth"],
+			"dst": ["svc:home", "svc:radarr", "svc:sonarr", "svc:prowlarr", "svc:sabnzbd", "svc:pihole", "svc:dispatcharr", "svc:auth"],
 			"ip":  ["tcp:443"],
 		},
 		// Admins: kubectl through the operator's API proxy, impersonated as cluster-admin.

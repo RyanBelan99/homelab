@@ -18,8 +18,11 @@ POD_CIDR=10.42.0.0/16             # k3s defaults
 SERVICE_CIDR=10.43.0.0/16
 K3S_VERSION=v1.36.2+k3s1          # pinned so a rebuild restores onto the same version
 
+# Wait up to 15 minutes for a running unattended-upgrades instead of failing on the dpkg lock.
+apt-get() { command apt-get -o DPkg::Lock::Timeout=900 "$@"; }
+
 # shellcheck disable=SC1091
-. /etc/os-release                  # ID: debian (Raspberry Pi OS) or ubuntu
+. /etc/os-release                 # ID: debian (Raspberry Pi OS) or ubuntu
 
 IFACE=$(ip route show default | awk '{print $5; exit}')
 IP=$(ip -4 -o addr show dev "$IFACE" | awk '{print $4}' | cut -d/ -f1 | head -1)

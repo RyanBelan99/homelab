@@ -230,11 +230,10 @@ apps:
     node: worker
     image: lscr.io/linuxserver/prowlarr:latest
     gluetunImage: qmcgaw/gluetun:latest
-    flaresolverrImage: ghcr.io/germondai/trawl:latest
     route: {host: prowlarr, service: prowlarr, port: 9696, lan: false}
     dashboard:
       title: Prowlarr
-      sidecars: [gluetun, cf-solver]
+      sidecars: [gluetun]
       icon: prowlarr.svg
       description: Indexers (via VPN)
       widget:
@@ -243,17 +242,21 @@ apps:
         keyVar: PROWLARR_KEY
         fields: [numberOfGrabs, numberOfQueries, numberOfFailGrabs]
 
-  qbittorrent:
+  sabnzbd:
     namespace: media
     node: worker
-    image: lscr.io/linuxserver/qbittorrent:latest
+    image: lscr.io/linuxserver/sabnzbd:latest
     gluetunImage: qmcgaw/gluetun:latest
-    route: {host: qbit, service: qbittorrent, port: 8080, lan: false}
+    route: {host: sabnzbd, service: sabnzbd, port: 8080, lan: false}
     dashboard:
-      title: qBittorrent
+      title: SABnzbd
       sidecars: [gluetun]
-      icon: qbittorrent.svg
-      description: Downloads (via VPN)
+      icon: sabnzbd.svg
+      description: Usenet (via VPN)
+      widget:
+        type: sabnzbd
+        url: http://sabnzbd.media.svc.cluster.local:8080
+        keyVar: SABNZBD_KEY
 
   homepage:
     namespace: dashboard
@@ -285,7 +288,7 @@ apps:
       # created; a client added here later must also be added in the console.
       clients: [homepage]
       # Apps behind Keycloak sign-in (one shared oauth2-proxy + forward auth, admins only).
-      protect: [homepage, prowlarr, radarr, sonarr, qbittorrent, pihole, dispatcharr]
+      protect: [homepage, prowlarr, radarr, sonarr, sabnzbd, pihole, dispatcharr]
     dashboard:
       title: Keycloak
       sidecars: [postgres]
@@ -300,7 +303,7 @@ dashboard:
     - {name: Security, columns: 4, tiles: [keycloak, sso, crowdsec, crowdsecAgents]}
     - {name: Cluster, columns: 3, tiles: [traefik, coredns, metricsServer, localPath, tailscaleOperator, protonExit]}
     - {name: Media, columns: 3, tiles: [jellyfin, seerr, dispatcharr]}
-    - {name: Automation, columns: 4, tiles: [radarr, sonarr, prowlarr, qbittorrent]}
+    - {name: Automation, columns: 4, tiles: [radarr, sonarr, prowlarr, sabnzbd]}
   extras:
     sso:
       title: Sign-in proxy

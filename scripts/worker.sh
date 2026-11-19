@@ -22,12 +22,9 @@ systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
 systemctl kill -s HUP systemd-logind   # reloads logind config
 
 echo "== data folders =="
-mkdir -p /mnt/config /mnt/data/media
-if [ ! -d /mnt/data/torrents ]; then
-  mkdir /mnt/data/torrents
-  chattr +C /mnt/data/torrents      # btrfs: no copy-on-write for torrents; only works while empty
-fi
-chown "$ADMIN:$ADMIN" /mnt/config /mnt/data /mnt/data/media /mnt/data/torrents
+mkdir -p /mnt/config /mnt/data/media /mnt/data/usenet/incomplete /mnt/data/usenet/complete
+chown "$ADMIN:$ADMIN" /mnt/config /mnt/data /mnt/data/media \
+  /mnt/data/usenet /mnt/data/usenet/incomplete /mnt/data/usenet/complete
 semanage fcontext -a -t container_file_t "/mnt/(config|data)(/.*)?" 2>/dev/null || true
 restorecon -R /mnt/config /mnt/data
 
@@ -44,6 +41,11 @@ EOF
 chmod 600 /etc/ssh/sshd_config.d/10-hardening.conf
 restorecon /etc/ssh/sshd_config.d/10-hardening.conf
 sshd -t && systemctl reload sshd
+
+echo "== no Cockpit: its password login on :9090 would be the only one on the LAN =="
+systemctl disable --now cockpit.socket cockpit.service 2>/dev/null || true
+firewall-cmd --permanent --remove-service=cockpit >/dev/null 2>&1 || true
+firewall-cmd --reload >/dev/null
 
 echo "== daily security updates, no reboots =="
 dnf install -y dnf5-plugin-automatic
