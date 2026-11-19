@@ -73,7 +73,4 @@ spec:
             - name: script
               configMap:
                 name: livetv-playlists
-            - name: m3us
-              hostPath:
-                path: {{ .Values.paths.config }}/dispatcharr/data/m3us
-                type: Directory
+            {{- include "homelab.configVolume" (list . "m3us" "dispatcharr/data/m3us") | nindent 12 }}

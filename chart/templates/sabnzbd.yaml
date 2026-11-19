@@ -53,10 +53,7 @@ spec:
               mountPath: /data
       volumes:
         {{- include "homelab.configVolume" (list . "config" "sabnzbd") | nindent 8 }}
-        - name: data
-          hostPath:
-            path: {{ .Values.paths.data }}
-            type: Directory
+        {{- include "homelab.dataVolume" (list . "data" "") | nindent 8 }}
         {{- include "homelab.tunVolume" . | nindent 8 }}
 ---
 apiVersion: v1

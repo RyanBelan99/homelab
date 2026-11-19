@@ -46,6 +46,5 @@ spec:
               memory: 256Mi
       volumes:
         - name: nas-data
-          hostPath:
-            path: {{ .Values.paths.nasShare }}
-            type: Directory
+          persistentVolumeClaim:
+            claimName: {{ include "homelab.claimName" (list "nasShare" "") }}

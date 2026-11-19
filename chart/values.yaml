@@ -32,6 +32,32 @@ paths:
   data: /mnt/data
   nasShare: /home/rbelan/shared/nas
 
+# Folders on a node's own disk, each a node-bound volume (storage.yaml): a pod can only run on
+# the node that holds its data, and never starts on another node with an empty folder.
+# <base> is a key of paths; app picks the namespace and node.
+storage:
+  volumes:
+    - {app: radarr, base: config, path: radarr}
+    - {app: sonarr, base: config, path: sonarr}
+    - {app: prowlarr, base: config, path: prowlarr}
+    - {app: sabnzbd, base: config, path: sabnzbd}
+    - {app: seerr, base: config, path: seerr}
+    - {app: jellyfin, base: config, path: jellyfin/config}
+    - {app: jellyfin, base: config, path: jellyfin/cache}
+    - {app: dispatcharr, base: config, path: dispatcharr/data}
+    - {app: dispatcharr, base: config, path: dispatcharr/postgres}
+    - {app: livetvPlaylists, base: config, path: dispatcharr/data/m3us}
+    - {app: keycloak, base: config, path: keycloak/postgres}
+    - {app: protonExit, base: config, path: proton-exit}
+    # Media: shared by Radarr, Sonarr and SABnzbd (one claim, one node); Jellyfin reads media/.
+    - {app: radarr, base: data, path: ""}
+    - {app: jellyfin, base: data, path: media}
+    - {app: samba, base: nasShare, path: ""}
+
+# Ingress allow lists per namespace (networkpolicies.yaml).
+networkPolicies:
+  enabled: true
+
 # Public HTTPS on secrets.publicDomain (a free dynamic-DNS name). The router forwards TCP 443
 # to the server; Pi-hole answers the name (and its sub-names) with the server's LAN IP at home.
 # Apps opt in with public: {host, loginPath}: host "" is the bare name, otherwise <host>.<name>.
@@ -147,6 +173,8 @@ apps:
     node: worker
     image: jellyfin/jellyfin:latest
     route: {host: jellyfin, service: jellyfin, port: 8096}
+    # Live TV guide artwork (per programme, about 1 GB a day) older than this is deleted nightly.
+    livetvArtworkDays: 3
     # Public HTTPS at secrets.publicDomain (see public: above); loginPath gets a stricter rate limit.
     public: {host: "", loginPath: "(?i)^/Users/AuthenticateByName$"}
     dashboard:

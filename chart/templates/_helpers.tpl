@@ -27,13 +27,23 @@ runAsUser: {{ .Values.admin.uid }}
 runAsGroup: {{ .Values.admin.gid }}
 {{- end }}
 
-{{/* hostPath volume under paths.config. Usage: include "homelab.configVolume" (list $ "name" "sub/path") */}}
+{{/* Node-bound volume under paths.config (see storage.yaml). Usage: include "homelab.configVolume" (list $ "name" "sub/path") */}}
 {{- define "homelab.configVolume" -}}
-{{- $root := index . 0 -}}
 - name: {{ index . 1 }}
-  hostPath:
-    path: {{ $root.Values.paths.config }}/{{ index . 2 }}
-    type: Directory
+  persistentVolumeClaim:
+    claimName: {{ include "homelab.claimName" (list "config" (index . 2)) }}
+{{- end }}
+
+{{/* Node-bound volume under paths.data, "" for the whole folder. Usage: include "homelab.dataVolume" (list $ "name" "sub/path") */}}
+{{- define "homelab.dataVolume" -}}
+- name: {{ index . 1 }}
+  persistentVolumeClaim:
+    claimName: {{ include "homelab.claimName" (list "data" (index . 2)) }}
+{{- end }}
+
+{{/* Claim name for a storage.volumes entry: config + jellyfin/cache -> config-jellyfin-cache. */}}
+{{- define "homelab.claimName" -}}
+{{- $base := index . 0 | kebabcase }}{{ with index . 1 }}{{ $base }}-{{ . | replace "/" "-" }}{{ else }}{{ $base }}{{ end -}}
 {{- end }}
 
 {{/*

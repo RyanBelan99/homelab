@@ -215,10 +215,7 @@ spec:
         - name: realm
           configMap:
             name: keycloak-realm
-        - name: db
-          hostPath:
-            path: {{ $.Values.paths.config }}/keycloak/postgres
-            type: DirectoryOrCreate
+        {{- include "homelab.configVolume" (list $ "db" "keycloak/postgres") | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service

@@ -1,0 +1,188 @@
+{{/*
+Ingress allow lists, one namespace at a time: each namespace denies everything in, then
+allows only the flows its apps need (mapped from live connection tracking). Egress stays
+open. Health probes from the node need no rule: k3s's policy engine and Cilium both let a
+node reach its own pods. Plain networking.k8s.io/v1 objects, so they carry over to Cilium.
+Not covered: kube-system, tailscale and vpn-exit (tailnet peers reach their proxies
+directly), and Samba (host network).
+Cilium (Phase 3b): an ipBlock there matches only addresses outside the cluster, not other
+nodes; centralbook's host resolves through Pi-hole, so set policy-cidr-match-mode: nodes.
+*/}}
+{{- define "homelab.fromNamespace" -}}
+- namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: {{ . }}
+{{- end }}
+{{- if .Values.networkPolicies.enabled }}
+{{- $a := .Values.apps }}
+{{- $ns := dict "traefik" $a.traefik.namespace "dashboard" $a.homepage.namespace "media" $a.jellyfin.namespace "auth" $a.keycloak.namespace "pihole" $a.pihole.namespace "crowdsec" $a.crowdsec.namespace }}
+{{- range $name := list "traefik" "dashboard" "media" "auth" "pihole" "crowdsec" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ index $ns $name }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+{{- end }}
+---
+# Traefik: the front door, from anywhere (LAN, tailnet via tailscale serve, the router's 443).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: traefik-entrypoints
+  namespace: {{ $ns.traefik }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: traefik
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock: {cidr: 0.0.0.0/0}
+      ports:
+        - {port: 8000, protocol: TCP}
+        - {port: 8443, protocol: TCP}
+---
+# Homepage: through Traefik only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: homepage
+  namespace: {{ $ns.dashboard }}
+spec:
+  podSelector:
+    matchLabels:
+      app: homepage
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- include "homelab.fromNamespace" $ns.traefik | nindent 8 }}
+      ports:
+        - {port: 3000, protocol: TCP}
+---
+# Keycloak: browsers through Traefik, and the shared oauth2-proxy (token redeem, keys).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keycloak
+  namespace: {{ $ns.auth }}
+spec:
+  podSelector:
+    matchLabels:
+      app: keycloak
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- include "homelab.fromNamespace" $ns.traefik | nindent 8 }}
+        - podSelector:
+            matchLabels:
+              app: oauth2-proxy
+      ports:
+        - {port: 8080, protocol: TCP}
+---
+# oauth2-proxy: Traefik's forward-auth checks and the /oauth2/ callback.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: oauth2-proxy
+  namespace: {{ $ns.auth }}
+spec:
+  podSelector:
+    matchLabels:
+      app: oauth2-proxy
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- include "homelab.fromNamespace" $ns.traefik | nindent 8 }}
+      ports:
+        - {port: 4180, protocol: TCP}
+---
+# Pi-hole: DNS for everyone (LAN, tailnet, nodes, pods); the admin UI through Traefik and
+# Homepage's widget.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pihole
+  namespace: {{ $ns.pihole }}
+spec:
+  podSelector:
+    matchLabels:
+      app: pihole
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock: {cidr: 0.0.0.0/0}
+        - namespaceSelector: {}
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    - from:
+        {{- include "homelab.fromNamespace" $ns.traefik | nindent 8 }}
+        {{- include "homelab.fromNamespace" $ns.dashboard | nindent 8 }}
+      ports:
+        - {port: 80, protocol: TCP}
+---
+# CrowdSec LAPI: the Traefik bouncer, the agents, and Homepage's widget.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: crowdsec-lapi
+  namespace: {{ $ns.crowdsec }}
+spec:
+  podSelector:
+    matchLabels:
+      type: lapi
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- include "homelab.fromNamespace" $ns.traefik | nindent 8 }}
+        {{- include "homelab.fromNamespace" $ns.dashboard | nindent 8 }}
+        - podSelector:
+            matchLabels:
+              type: agent
+      ports:
+        - {port: 8080, protocol: TCP}
+---
+# Media apps: Traefik, Homepage's widgets, and each other (Seerr to Jellyfin and the *arrs,
+# the *arrs to Prowlarr, Jellyfin and the Live TV job to Dispatcharr). SABnzbd is excluded
+# here and gets its own, narrower rule below.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: media-apps
+  namespace: {{ $ns.media }}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: app, operator: NotIn, values: [sabnzbd]}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- include "homelab.fromNamespace" $ns.traefik | nindent 8 }}
+        {{- include "homelab.fromNamespace" $ns.dashboard | nindent 8 }}
+        - podSelector: {}
+---
+# SABnzbd has no login of its own (Keycloak is the gate), so only what drives it may connect:
+# Traefik, Homepage's widget, Radarr, Sonarr and Prowlarr. Jellyfin and Seerr, the two public
+# apps, can't reach it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sabnzbd
+  namespace: {{ $ns.media }}
+spec:
+  podSelector:
+    matchLabels:
+      app: sabnzbd
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- include "homelab.fromNamespace" $ns.traefik | nindent 8 }}
+        {{- include "homelab.fromNamespace" $ns.dashboard | nindent 8 }}
+        - podSelector:
+            matchExpressions:
+              - {key: app, operator: In, values: [radarr, sonarr, prowlarr]}
+{{- end }}
