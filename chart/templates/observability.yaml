@@ -145,6 +145,10 @@ data:
                     - evaluator: {type: {{ .op }}, params: [{{ .value }}]}
           {{- end }}
     {{- if and $tg.botToken $tg.chatId }}
+    # Telegram caps a message at 4096 characters. Grafana's default message lists every label,
+    # value and link, so a burst of alerts can pass that; cut mid-tag in a parse mode, the whole
+    # message is rejected. Plain text (safe to truncate) and one short line per alert instead,
+    # written inline: a separately provisioned template rendered empty in Grafana's test path.
     contactPoints:
       - orgId: 1
         name: telegram
@@ -154,7 +158,11 @@ data:
             settings:
               bottoken: $__env{TELEGRAM_BOT_TOKEN}
               chatid: $__env{TELEGRAM_CHAT_ID}
-              parse_mode: HTML
+              parse_mode: None
+              message: |-
+                {{`{{ if eq .Status "firing" }}🔥 FIRING{{ else }}✅ RESOLVED{{ end }}: {{ .CommonLabels.alertname }}
+                {{ range .Alerts }}• {{ .Annotations.summary }}
+                {{ end }}`}}
     policies:
       - orgId: 1
         receiver: telegram
