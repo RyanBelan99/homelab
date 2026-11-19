@@ -5,6 +5,8 @@ only) refuses banned IPs. The bouncer key is generated once and kept, like Keycl
 {{- $app := .Values.apps.crowdsec }}
 {{- $stored := (lookup "v1" "Secret" $app.namespace "crowdsec-bouncer").data | default dict }}
 {{- $key := (get $stored "key" | b64dec) | default (randAlphaNum 48) }}
+{{- $tg := .Values.secrets.telegram | default dict }}
+{{- $chat := include "homelab.telegramChat" . }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -13,6 +15,18 @@ metadata:
 type: Opaque
 stringData:
   key: {{ $key | quote }}
+{{- if and $tg.botToken $chat }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: crowdsec-telegram
+  namespace: {{ $app.namespace }}
+type: Opaque
+stringData:
+  botToken: {{ $tg.botToken | quote }}
+  chatId: {{ $chat | quote }}
+{{- end }}
 {{- with (.Values.secrets.crowdsec | default dict).enrollKey }}
 ---
 apiVersion: v1
@@ -57,6 +71,19 @@ spec:
           value: {{ (index $.Values.nodes $app.node).name }}
         - name: ENROLL_TAGS
           value: "k3s homelab"
+        {{- end }}
+        {{- if and $tg.botToken $chat }}
+        # Read by the telegram notification below (CrowdSec expands ${VAR} in its URL).
+        - name: TELEGRAM_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: crowdsec-telegram
+              key: botToken
+        - name: TELEGRAM_CHAT_ID
+          valueFrom:
+            secretKeyRef:
+              name: crowdsec-telegram
+              key: chatId
         {{- end }}
       nodeSelector:
         kubernetes.io/hostname: {{ (index .Values.nodes $app.node).name }}
@@ -114,6 +141,44 @@ spec:
           flush:
             agents_autodelete:
               login_password: 168h
+      {{- if and $tg.botToken $chat }}
+      # The image's default profiles (ban IPs and ranges for 4 h), plus a Telegram message for
+      # each ban CrowdSec decides here. Community blocklist entries never notify.
+      profiles.yaml: |
+        name: default_ip_remediation
+        filters:
+          - Alert.Remediation == true && Alert.GetScope() == "Ip"
+        decisions:
+          - type: ban
+            duration: 4h
+        notifications: [telegram]
+        on_success: break
+        ---
+        name: default_range_remediation
+        filters:
+          - Alert.Remediation == true && Alert.GetScope() == "Range"
+        decisions:
+          - type: ban
+            duration: 4h
+        notifications: [telegram]
+        on_success: break
+      notifications:
+        # One plain-text message per 30 s burst (a scan trips several scenarios at once), at
+        # most 15 alerts each, well under Telegram's 4096 characters.
+        telegram.yaml: |
+          type: http
+          name: telegram
+          log_level: info
+          group_wait: 30s
+          group_threshold: 15
+          # ${VAR} is expanded in these settings but not in format, so the chat ID rides in the URL.
+          url: https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${TELEGRAM_CHAT_ID}
+          method: POST
+          headers:
+            Content-Type: application/json
+          format: |
+            {{`{"text": "🛡️ CrowdSec banned an attacker on the public sites{{ range . }}\n• {{ .Source.Value }} ({{ .Source.Cn | default "?" }}{{ with .Source.AsName }}, {{ . | replace "\\" "" | replace "\"" "'" }}{{ end }}): {{ .Scenario | trimPrefix "crowdsecurity/" }}, {{ .EventsCount }} requests{{ range .Decisions }}, {{ .Type }} {{ .Duration }}{{ end }}{{ end }}\nUndo: cscli decisions delete --ip <ip>"}`}}
+      {{- end }}
       parsers:
         s01-parse:
           # The hub's LePresidente/jellyseerr-logs only knows "Failed login attempt"; Seerr v3

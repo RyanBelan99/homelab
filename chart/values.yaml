@@ -159,56 +159,57 @@ apps:
         op: lt
         value: 1
         for: 3m
-        summary: "{{ $labels.instance }} stopped reporting metrics"
+        summary: '{{ $labels.instance }} stopped reporting metrics for 3 minutes: check it is powered on and online.'
       - uid: disk-low
         title: Disk space low
         expr: 100 * node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs"} / node_filesystem_size_bytes{fstype=~"ext4|xfs|btrfs"}
         op: lt
         value: 15
         for: 15m
-        summary: "{{ $labels.instance }} {{ $labels.mountpoint }} has under 15% free"
+        summary: '{{ $labels.instance }} {{ $labels.mountpoint }} is down to {{ printf "%.0f" $values.A.Value }}% free (alert below 15%).'
       - uid: cert-expiry
         title: Certificate expires soon
         expr: (max by (cn) (traefik_tls_certs_not_after) - time()) / 86400
         op: lt
         value: 14
         for: 1h
-        summary: "Certificate {{ $labels.cn }} expires in under 14 days: renewal is failing"
+        summary: 'Certificate {{ $labels.cn }} expires in {{ printf "%.0f" $values.A.Value }} days: renewal (DuckDNS or Let''s Encrypt) is failing. Check the Traefik logs.'
       - uid: pod-crashloop
         title: Pod restarting
         expr: increase(kube_pod_container_status_restarts_total[30m])
         op: gt
         value: 3
         for: 5m
-        summary: "{{ $labels.namespace }}/{{ $labels.pod }} restarted more than 3 times in 30 minutes"
+        summary: '{{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }}) restarted {{ printf "%.0f" $values.A.Value }} times in 30 minutes.'
       - uid: deployment-down
         title: App not ready
         expr: kube_deployment_status_replicas_available
         op: lt
         value: 1
         for: 10m
-        summary: "{{ $labels.namespace }}/{{ $labels.deployment }} has no ready pod"
+        summary: '{{ $labels.namespace }}/{{ $labels.deployment }} has had no ready pod for 10 minutes.'
+      # Returns the battery level only while AC is off, so the message can say how much is left.
       - uid: on-battery
         title: Worker on battery
-        expr: max by (instance) (node_power_supply_online{power_supply=~"(?i).*(ac|adp|mains|usb-c).*"})
-        op: lt
-        value: 1
+        expr: max by (instance) (node_power_supply_capacity{power_supply=~"(?i).*battery.*"}) and on (instance) (max by (instance) (node_power_supply_online{power_supply=~"(?i).*(ac|adp|mains|usb-c).*"}) == 0)
+        op: gt
+        value: -1
         for: 2m
-        summary: "{{ $labels.instance }} lost AC power; a drained MacBook stays off until its lid opens"
+        summary: '{{ $labels.instance }} is on battery at {{ printf "%.0f" $values.A.Value }}%. Plug the charger back in: at empty it shuts down and stays off until the lid is opened.'
       - uid: too-hot
         title: Node running hot
         expr: max by (instance) (node_thermal_zone_temp)
         op: gt
         value: 75
         for: 10m
-        summary: "{{ $labels.instance }} is above 75 C"
+        summary: '{{ $labels.instance }} has been at {{ printf "%.0f" $values.A.Value }} C for 10 minutes (alert above 75 C). Check airflow; a Pi throttles near 80 C.'
       - uid: crowdsec-agent-down
         title: CrowdSec agent down
         expr: up{job="crowdsec",pod=~"crowdsec-agent.*"}
         op: lt
         value: 1
         for: 15m
-        summary: "CrowdSec agent {{ $labels.pod }} is down: that node's logs go unread"
+        summary: 'CrowdSec agent {{ $labels.pod }} on {{ $labels.node }} is down: that node''s logs go unread. The watchdog replaces stuck agents within 5 minutes.'
     dashboard:
       title: Grafana
       icon: grafana.svg

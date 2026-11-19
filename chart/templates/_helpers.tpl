@@ -128,3 +128,12 @@ oauth2-proxy copy always match. Usage: include "homelab.oidcClientSecret" (list 
 annotations:
   helm.sh/resource-policy: keep
 {{- end }}
+
+{{/*
+Telegram chat ID from secrets.telegram as a string, empty if unset. An unquoted ID is a YAML
+number, which Helm would render as 1.23e+09: keep it whole. Usage: include "homelab.telegramChat" .
+*/}}
+{{- define "homelab.telegramChat" -}}
+{{- $id := (.Values.secrets.telegram | default dict).chatId -}}
+{{- if kindIs "string" $id }}{{ $id }}{{ else if $id }}{{ $id | int64 }}{{ end -}}
+{{- end }}

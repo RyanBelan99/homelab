@@ -41,13 +41,14 @@ adding an app (publishes its Tailscale Service).
 - Seerr v3 logs "Failed sign-in attempt", which the hub's Jellyseerr parser doesn't know; `homelab/seerr-logs` in `crowdsec.yaml` covers it.
 - Homepage's CrowdSec widget signs in as the machine `homepage`, with the password the chart keeps in `homepage-widgets`. The machine lives in LAPI's database, so after a fresh CrowdSec install register it again:
   `kubectl -n dashboard get secret homepage-widgets -o jsonpath='{.data.HOMEPAGE_VAR_CROWDSEC_PASSWORD}' | base64 -d | kubectl -n crowdsec exec -i deploy/crowdsec-lapi -- sh -c 'cscli machines add homepage --password "$(cat)" --force -f /dev/null'`
+- Each ban CrowdSec decides itself sends a Telegram message (IP, country, network, scenario; bursts within 30 s share one message). Community blocklist entries don't. The text is `telegram.yaml` in `crowdsec.yaml`; test it with `kubectl -n crowdsec exec deploy/crowdsec-lapi -- cscli notifications test telegram`.
 - Useful commands: `kubectl -n crowdsec exec deploy/crowdsec-lapi -- cscli decisions list`, `... cscli alerts list`, `... cscli decisions delete --ip <ip>`.
 
 ## Observability
 
 - `grafana.<tailnet>` (admins, Keycloak sign-in, no second login): node, Traefik and CrowdSec dashboards, pinned in `apps.observability.dashboards`.
 - One pod (`observability` namespace) runs Prometheus (15 days, 4 GB cap), Grafana and kube-state-metrics; a node-exporter runs on each node. Prometheus scrapes the node-exporters and the `metrics` ports of Traefik and CrowdSec.
-- Alerts are Grafana rules in `apps.observability.alerts`, sent to Telegram (`secrets.telegram`). Rule edits need `kubectl -n observability rollout restart deploy/observability`.
+- Alerts are Grafana rules in `apps.observability.alerts`, sent to Telegram (`secrets.telegram`). Each rule's `summary` is its message line (`$values.A.Value` is the measured number); the Telegram layout around it is the contact point's `message` in `observability.yaml`. Grafana shows provisioned rules read-only: edit them here, then `helm upgrade` and `kubectl -n observability rollout restart deploy/observability`.
 - Add `svc:grafana` to the Services page before `server.sh` serves it.
 
 ## Storage and network policies

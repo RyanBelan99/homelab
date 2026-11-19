@@ -9,9 +9,7 @@ Keycloak sign-in and trusts its identity header from Traefik's range, so there i
 {{- $ns := $app.namespace }}
 {{- $tailnet := .Values.secrets.tailnet }}
 {{- $tg := .Values.secrets.telegram | default dict }}
-{{- /* An unquoted chat ID is a YAML number, which Helm would render as 1.23e+09: keep it whole. */}}
-{{- $chat := "" }}
-{{- if kindIs "string" $tg.chatId }}{{ $chat = $tg.chatId }}{{ else if $tg.chatId }}{{ $chat = $tg.chatId | int64 | toString }}{{ end }}
+{{- $chat := include "homelab.telegramChat" . }}
 {{- $stored := (lookup "v1" "Secret" $ns "grafana").data | default dict }}
 apiVersion: v1
 kind: ServiceAccount
