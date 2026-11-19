@@ -9,7 +9,6 @@ file, one secrets file. Remote access is Tailscale only, with no open router por
 |---|---|
 | Traefik | Front door: routes every app by hostname |
 | Pi-hole + unbound | Network DNS and ad blocking, DNS-over-TLS upstream |
-| Samba | Network file share |
 | Jellyfin | Media server, with free live TV via Dispatcharr |
 | Seerr | Request page for movies and shows |
 | Radarr, Sonarr, Prowlarr, SABnzbd | Media automation; Usenet downloads and indexers behind a VPN kill switch |

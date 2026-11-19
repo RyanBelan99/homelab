@@ -28,6 +28,7 @@
 			"svc:pihole":      ["tag:homelab"],
 			"svc:dispatcharr": ["tag:homelab"],
 			"svc:auth":        ["tag:homelab"],
+			"svc:grafana":     ["tag:homelab"],
 		},
 	},
 
@@ -43,7 +44,7 @@
 		// Admins: every app.
 		{
 			"src": ["autogroup:admin"],
-			"dst": ["svc:home", "svc:radarr", "svc:sonarr", "svc:prowlarr", "svc:sabnzbd", "svc:pihole", "svc:dispatcharr", "svc:auth"],
+			"dst": ["svc:home", "svc:radarr", "svc:sonarr", "svc:prowlarr", "svc:sabnzbd", "svc:pihole", "svc:dispatcharr", "svc:auth", "svc:grafana"],
 			"ip":  ["tcp:443"],
 		},
 		// Admins: kubectl through the operator's API proxy, impersonated as cluster-admin.
@@ -55,8 +56,8 @@
 				"tailscale.com/cap/kubernetes": [{"impersonate": {"groups": ["system:masters"]}}],
 			},
 		},
-		// Admins: SSH, SMB, and the k3s API directly (break-glass).
-		{"src": ["autogroup:admin"], "dst": ["tag:homelab"], "ip": ["tcp:22", "tcp:6443", "tcp:445"]},
+		// Admins: SSH and the k3s API directly (break-glass).
+		{"src": ["autogroup:admin"], "dst": ["tag:homelab"], "ip": ["tcp:22", "tcp:6443"]},
 		// Admins: either exit node.
 		{"src": ["autogroup:admin"], "dst": ["autogroup:internet"], "ip": ["*"]},
 	],

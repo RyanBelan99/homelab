@@ -43,9 +43,16 @@ adding an app (publishes its Tailscale Service).
   `kubectl -n dashboard get secret homepage-widgets -o jsonpath='{.data.HOMEPAGE_VAR_CROWDSEC_PASSWORD}' | base64 -d | kubectl -n crowdsec exec -i deploy/crowdsec-lapi -- sh -c 'cscli machines add homepage --password "$(cat)" --force -f /dev/null'`
 - Useful commands: `kubectl -n crowdsec exec deploy/crowdsec-lapi -- cscli decisions list`, `... cscli alerts list`, `... cscli decisions delete --ip <ip>`.
 
+## Observability
+
+- `grafana.<tailnet>` (admins, Keycloak sign-in, no second login): node, Traefik and CrowdSec dashboards, pinned in `apps.observability.dashboards`.
+- One pod (`observability` namespace) runs Prometheus (15 days, 4 GB cap), Grafana and kube-state-metrics; a node-exporter runs on each node. Prometheus scrapes the node-exporters and the `metrics` ports of Traefik and CrowdSec.
+- Alerts are Grafana rules in `apps.observability.alerts`, sent to Telegram (`secrets.telegram`). Rule edits need `kubectl -n observability rollout restart deploy/observability`.
+- Add `svc:grafana` to the Services page before `server.sh` serves it.
+
 ## Storage and network policies
 
-- App folders under `/mnt/config`, `/mnt/data` and the Samba share are node-bound volumes (`storage.volumes` in values, `storage.yaml`): a local PersistentVolume pinned to the node that holds the folder, pre-bound to one claim. Data stays in place. Add a folder there, not as a `hostPath`. Moving an app to another node is explicit: scale it to 0, copy the folder, change its entry, scale up.
+- App folders under `/mnt/config` and `/mnt/data` are node-bound volumes (`storage.volumes` in values, `storage.yaml`): a local PersistentVolume pinned to the node that holds the folder, pre-bound to one claim. Data stays in place. Add a folder there, not as a `hostPath`. Moving an app to another node is explicit: scale it to 0, copy the folder, change its entry, scale up.
 - Each namespace with apps denies incoming traffic except the flows listed in `networkpolicies.yaml` (egress stays open). SABnzbd only accepts Traefik, Homepage, Radarr, Sonarr and Prowlarr. A new app that another app or Homepage calls needs its flow added there.
 - If `helm upgrade` fails with "may not specify more than 1 volume type", an old `kubectl apply` still owns that volume: replace it with a JSON patch (`kubectl patch --type=json`, remove the old field and add the new one), then upgrade again.
 

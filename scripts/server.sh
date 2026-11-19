@@ -112,10 +112,11 @@ install -d -m 700 -o "$ADMIN" -g "$ADMIN" "/home/$ADMIN/.kube"
 install -m 600 -o "$ADMIN" -g "$ADMIN" /etc/rancher/k3s/k3s.yaml "/home/$ADMIN/.kube/config"
 k3s kubectl label node "$NODE" svccontroller.k3s.cattle.io/enablelb=true --overwrite
 
-echo "== firewall: LAN and VPN reach only ssh, smb, k3s API, DNS, Traefik =="
+echo "== firewall: LAN and VPN reach only ssh, k3s API, DNS, Traefik =="
 for net in $LAN $VPN_CIDR; do
   ufw allow from "$net" to any port 22 proto tcp comment ssh
-  ufw allow from "$net" to any port 445 proto tcp comment samba
+  # Samba was removed: close its port on hosts that still have the rule.
+  ufw delete allow from "$net" to any port 445 proto tcp >/dev/null 2>&1 || true
   ufw allow from "$net" to any port 6443 proto tcp comment 'k3s API'
   ufw allow from "$net" to any port 53 comment dns
   ufw allow from "$net" to any port 80 proto tcp comment traefik

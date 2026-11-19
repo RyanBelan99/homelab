@@ -4,7 +4,7 @@ allows only the flows its apps need (mapped from live connection tracking). Egre
 open. Health probes from the node need no rule: k3s's policy engine and Cilium both let a
 node reach its own pods. Plain networking.k8s.io/v1 objects, so they carry over to Cilium.
 Not covered: kube-system, tailscale and vpn-exit (tailnet peers reach their proxies
-directly), and Samba (host network).
+directly).
 Cilium (Phase 3b): an ipBlock there matches only addresses outside the cluster, not other
 nodes; centralbook's host resolves through Pi-hole, so set policy-cidr-match-mode: nodes.
 */}}
@@ -15,8 +15,8 @@ nodes; centralbook's host resolves through Pi-hole, so set policy-cidr-match-mod
 {{- end }}
 {{- if .Values.networkPolicies.enabled }}
 {{- $a := .Values.apps }}
-{{- $ns := dict "traefik" $a.traefik.namespace "dashboard" $a.homepage.namespace "media" $a.jellyfin.namespace "auth" $a.keycloak.namespace "pihole" $a.pihole.namespace "crowdsec" $a.crowdsec.namespace }}
-{{- range $name := list "traefik" "dashboard" "media" "auth" "pihole" "crowdsec" }}
+{{- $ns := dict "traefik" $a.traefik.namespace "dashboard" $a.homepage.namespace "media" $a.jellyfin.namespace "auth" $a.keycloak.namespace "pihole" $a.pihole.namespace "crowdsec" $a.crowdsec.namespace "observability" $a.observability.namespace }}
+{{- range $name := list "traefik" "dashboard" "media" "auth" "pihole" "crowdsec" "observability" }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -45,6 +45,10 @@ spec:
       ports:
         - {port: 8000, protocol: TCP}
         - {port: 8443, protocol: TCP}
+    - from:
+        {{- include "homelab.fromNamespace" $ns.observability | nindent 8 }}
+      ports:
+        - {port: 9100, protocol: TCP}
 ---
 # Homepage: through Traefik only.
 apiVersion: networking.k8s.io/v1
@@ -145,6 +149,44 @@ spec:
               type: agent
       ports:
         - {port: 8080, protocol: TCP}
+---
+# CrowdSec metrics (LAPI and agents): Prometheus only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: crowdsec-metrics
+  namespace: {{ $ns.crowdsec }}
+spec:
+  podSelector:
+    matchLabels:
+      k8s-app: crowdsec
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- include "homelab.fromNamespace" $ns.observability | nindent 8 }}
+      ports:
+        - {port: 6060, protocol: TCP}
+---
+# Grafana through Traefik (behind Keycloak); node-exporters scraped by Prometheus in the same pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: observability
+  namespace: {{ $ns.observability }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- include "homelab.fromNamespace" $ns.traefik | nindent 8 }}
+      ports:
+        - {port: 3000, protocol: TCP}
+    - from:
+        - podSelector:
+            matchLabels:
+              app: observability
+      ports:
+        - {port: 9100, protocol: TCP}
 ---
 # Media apps: Traefik, Homepage's widgets, and each other (Seerr to Jellyfin and the *arrs,
 # the *arrs to Prowlarr, Jellyfin and the Live TV job to Dispatcharr). SABnzbd is excluded

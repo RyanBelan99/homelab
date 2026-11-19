@@ -1,0 +1,352 @@
+{{/*
+Observability: one pod with Prometheus (metrics, 30 s scrape), Grafana (dashboards and alerting
+to Telegram) and kube-state-metrics (pod and node state), plus a node-exporter per node for disk,
+CPU, temperature and power. Prometheus scrapes the node-exporters, Traefik (including certificate
+expiry) and CrowdSec (LAPI and agents) on their "metrics" ports. Grafana sits behind the shared
+Keycloak sign-in and trusts its identity header from Traefik's range, so there is no second login.
+*/}}
+{{- $app := .Values.apps.observability }}
+{{- $ns := $app.namespace }}
+{{- $tailnet := .Values.secrets.tailnet }}
+{{- $tg := .Values.secrets.telegram | default dict }}
+{{- /* An unquoted chat ID is a YAML number, which Helm would render as 1.23e+09: keep it whole. */}}
+{{- $chat := "" }}
+{{- if kindIs "string" $tg.chatId }}{{ $chat = $tg.chatId }}{{ else if $tg.chatId }}{{ $chat = $tg.chatId | int64 | toString }}{{ end }}
+{{- $stored := (lookup "v1" "Secret" $ns "grafana").data | default dict }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: observability
+  namespace: {{ $ns }}
+---
+# Prometheus discovers pods; kube-state-metrics reads object state. Read-only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: observability
+rules:
+  - apiGroups: [""]
+    resources: [pods, nodes, namespaces, persistentvolumeclaims, persistentvolumes, services, endpoints]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, daemonsets, statefulsets, replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: observability
+subjects:
+  - kind: ServiceAccount
+    name: observability
+    namespace: {{ $ns }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana
+  namespace: {{ $ns }}
+type: Opaque
+stringData:
+  # Break-glass only: sign-in normally comes from Keycloak through the proxy header.
+  GF_SECURITY_ADMIN_PASSWORD: {{ (get $stored "GF_SECURITY_ADMIN_PASSWORD" | b64dec) | default (randAlphaNum 32) | quote }}
+  TELEGRAM_BOT_TOKEN: {{ $tg.botToken | default "" | quote }}
+  TELEGRAM_CHAT_ID: {{ $chat | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus
+  namespace: {{ $ns }}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 30s
+      evaluation_interval: 30s
+    scrape_configs:
+      - job_name: prometheus
+        static_configs: [{targets: ["localhost:9090"]}]
+      - job_name: kube-state-metrics
+        static_configs: [{targets: ["localhost:8080"]}]
+      - job_name: node
+        kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
+        relabel_configs:
+          - {source_labels: [__meta_kubernetes_pod_label_app], regex: node-exporter, action: keep}
+          - {source_labels: [__meta_kubernetes_pod_node_name], target_label: instance}
+      {{- range $job, $target := dict "traefik" .Values.apps.traefik.namespace "crowdsec" .Values.apps.crowdsec.namespace }}
+      - job_name: {{ $job }}
+        kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $target }}]}}]
+        relabel_configs:
+          - {source_labels: [__meta_kubernetes_pod_container_port_name], regex: metrics, action: keep}
+          - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+          - {source_labels: [__meta_kubernetes_pod_node_name], target_label: node}
+      {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: {{ $ns }}
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        url: http://localhost:9090
+        isDefault: true
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: homelab
+        folder: Homelab
+        type: file
+        options: {path: /var/lib/grafana/dashboards}
+  alerting.yaml: |
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: homelab
+        folder: Homelab
+        interval: 1m
+        rules:
+          {{- range $app.alerts }}
+          - uid: {{ .uid }}
+            title: {{ .title | quote }}
+            condition: B
+            for: {{ .for }}
+            noDataState: OK
+            execErrState: Error
+            annotations:
+              summary: {{ .summary | quote }}
+            data:
+              - refId: A
+                datasourceUid: prometheus
+                relativeTimeRange: {from: 600, to: 0}
+                model:
+                  refId: A
+                  instant: true
+                  expr: {{ .expr | quote }}
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  refId: B
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator: {type: {{ .op }}, params: [{{ .value }}]}
+          {{- end }}
+    {{- if and $tg.botToken $tg.chatId }}
+    contactPoints:
+      - orgId: 1
+        name: telegram
+        receivers:
+          - uid: telegram
+            type: telegram
+            settings:
+              bottoken: $__env{TELEGRAM_BOT_TOKEN}
+              chatid: $__env{TELEGRAM_CHAT_ID}
+              parse_mode: HTML
+    policies:
+      - orgId: 1
+        receiver: telegram
+        group_by: [alertname, instance]
+        group_wait: 30s
+        repeat_interval: 12h
+    {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: observability
+  namespace: {{ $ns }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  # Prometheus locks its data directory: never two at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: observability
+  template:
+    metadata:
+      labels:
+        app: observability
+      annotations:
+        # Restart when the settings or Telegram secrets change (rule edits need a manual restart).
+        checksum/config: {{ printf "%s%s%s" (toJson $app) ($tg.botToken | default "") $chat | sha256sum | trunc 16 }}
+    spec:
+      serviceAccountName: observability
+      {{- include "homelab.nodeSelector" (list . $app.node) | nindent 6 }}
+      securityContext:
+        {{- include "homelab.runAsAdmin" . | nindent 8 }}
+        fsGroup: {{ .Values.admin.gid }}
+      initContainers:
+        # Pinned community dashboards, pointed at the local Prometheus.
+        - name: dashboards
+          image: busybox:1.37
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              {{- range $name, $url := $app.dashboards }}
+              wget -q -T 30 -O /dashboards/{{ $name }}.json {{ $url | quote }}
+              {{- end }}
+              sed -i 's/\${DS_PROMETHEUS}/prometheus/g; s/\${DS_PROMETHEUS_DS}/prometheus/g' /dashboards/*.json
+              ls -l /dashboards
+          volumeMounts:
+            - name: dashboards
+              mountPath: /dashboards
+      containers:
+        - name: prometheus
+          image: {{ $app.prometheusImage }}
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time={{ $app.retention }}
+            - --storage.tsdb.retention.size=4GB
+            - --web.enable-lifecycle
+          ports:
+            - name: prometheus
+              containerPort: 9090
+          readinessProbe:
+            httpGet: {path: /-/ready, port: prometheus}
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 50m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: prometheus-config, mountPath: /etc/prometheus}
+            - {name: prometheus-data, mountPath: /prometheus}
+        - name: grafana
+          image: {{ $app.grafanaImage }}
+          envFrom:
+            - secretRef:
+                name: grafana
+          env:
+            {{- include "homelab.tz" . | nindent 12 }}
+            - name: GF_SERVER_ROOT_URL
+              value: https://{{ $app.route.host }}.{{ $tailnet }}/
+            # Keycloak is the sign-in: oauth2-proxy's header from Traefik's range names the user.
+            - name: GF_AUTH_PROXY_ENABLED
+              value: "true"
+            - name: GF_AUTH_PROXY_HEADER_NAME
+              value: X-Auth-Request-Email
+            - name: GF_AUTH_PROXY_HEADER_PROPERTY
+              value: email
+            - name: GF_AUTH_PROXY_AUTO_SIGN_UP
+              value: "true"
+            - name: GF_AUTH_PROXY_WHITELIST
+              value: {{ .Values.network.serverPodCIDR | quote }}
+            - name: GF_USERS_AUTO_ASSIGN_ORG_ROLE
+              value: Admin
+            - name: GF_AUTH_DISABLE_LOGIN_FORM
+              value: "true"
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+            - name: GF_PATHS_PROVISIONING
+              value: /etc/grafana/provisioning
+          ports:
+            - name: grafana
+              containerPort: 3000
+          readinessProbe:
+            httpGet: {path: /api/health, port: grafana}
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: grafana-data, mountPath: /var/lib/grafana}
+            - {name: dashboards, mountPath: /var/lib/grafana/dashboards}
+            - {name: grafana-provisioning, mountPath: /etc/grafana/provisioning/datasources/datasources.yaml, subPath: datasources.yaml}
+            - {name: grafana-provisioning, mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml, subPath: dashboards.yaml}
+            - {name: grafana-provisioning, mountPath: /etc/grafana/provisioning/alerting/alerting.yaml, subPath: alerting.yaml}
+        - name: kube-state-metrics
+          image: {{ $app.kubeStateMetricsImage }}
+          args:
+            - --port=8080
+            - --telemetry-port=8081
+            - --resources=pods,nodes,deployments,daemonsets,statefulsets,replicasets,jobs,cronjobs,persistentvolumeclaims,namespaces
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+      volumes:
+        - name: prometheus-config
+          configMap: {name: prometheus}
+        - name: grafana-provisioning
+          configMap: {name: grafana-provisioning}
+        - name: dashboards
+          emptyDir: {}
+        {{- include "homelab.configVolume" (list . "prometheus-data" "observability/prometheus") | nindent 8 }}
+        {{- include "homelab.configVolume" (list . "grafana-data" "observability/grafana") | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: {{ $ns }}
+spec:
+  selector:
+    app: observability
+  ports:
+    - name: http
+      port: 3000
+      targetPort: grafana
+---
+# Host metrics from every node, read through the host's /proc and /sys (pod network: no host port).
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  namespace: {{ $ns }}
+spec:
+  selector:
+    matchLabels:
+      app: node-exporter
+  template:
+    metadata:
+      labels:
+        app: node-exporter
+    spec:
+      tolerations:
+        - operator: Exists
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+        - name: node-exporter
+          image: {{ $app.nodeExporterImage }}
+          args:
+            - --path.procfs=/host/proc
+            - --path.sysfs=/host/sys
+            - --path.rootfs=/host/root
+            - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/(kubelet|containers|rancher))($|/)
+          ports:
+            - name: metrics
+              containerPort: 9100
+          resources:
+            requests: {cpu: 10m, memory: 24Mi}
+            limits: {memory: 64Mi}
+          volumeMounts:
+            - {name: proc, mountPath: /host/proc, readOnly: true}
+            - {name: sys, mountPath: /host/sys, readOnly: true}
+            - {name: root, mountPath: /host/root, readOnly: true, mountPropagation: HostToContainer}
+      volumes:
+        - name: proc
+          hostPath: {path: /proc}
+        - name: sys
+          hostPath: {path: /sys}
+        - name: root
+          hostPath: {path: /}

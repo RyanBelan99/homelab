@@ -3,7 +3,7 @@
 
 timezone: America/Los_Angeles
 
-# Host account that owns the hostPath data and the Samba share.
+# Host account that owns the app data on the nodes.
 admin:
   user: rbelan
   uid: 1000
@@ -30,7 +30,6 @@ nodes:
 paths:
   config: /mnt/config
   data: /mnt/data
-  nasShare: /home/rbelan/shared/nas
 
 # Folders on a node's own disk, each a node-bound volume (storage.yaml): a pod can only run on
 # the node that holds its data, and never starts on another node with an empty folder.
@@ -49,10 +48,11 @@ storage:
     - {app: livetvPlaylists, base: config, path: dispatcharr/data/m3us}
     - {app: keycloak, base: config, path: keycloak/postgres}
     - {app: protonExit, base: config, path: proton-exit}
+    - {app: observability, base: config, path: observability/prometheus}
+    - {app: observability, base: config, path: observability/grafana}
     # Media: shared by Radarr, Sonarr and SABnzbd (one claim, one node); Jellyfin reads media/.
     - {app: radarr, base: data, path: ""}
     - {app: jellyfin, base: data, path: media}
-    - {app: samba, base: nasShare, path: ""}
 
 # Ingress allow lists per namespace (networkpolicies.yaml).
 networkPolicies:
@@ -93,15 +93,6 @@ apps:
         url: http://pihole-web.pihole.svc.cluster.local
         keyVar: PIHOLE_KEY
 
-  samba:
-    namespace: nas
-    node: server
-    image: ghcr.io/servercontainers/samba:latest@sha256:57859789bd3425e6e929269fa13b16251cc8b8f939e4362ed7100aaf41a17122
-    shareName: NetworkStorage
-    dashboard:
-      title: Samba
-      icon: mdi-folder-network
-      description: "NetworkStorage share (smb://{{ .Values.nodes.server.ip }})"
 
   traefik:
     namespace: traefik
@@ -140,6 +131,90 @@ apps:
         url: http://crowdsec-service.crowdsec.svc.cluster.local:8080
         username: homepage
         passwordVar: CROWDSEC_PASSWORD
+
+  # Metrics, dashboards and alerts: Prometheus, Grafana and kube-state-metrics in one pod, plus
+  # a node-exporter per node. Alerts go to Telegram from Grafana (secrets.telegram).
+  observability:
+    namespace: observability
+    node: worker
+    prometheusImage: prom/prometheus:v3.15.1
+    grafanaImage: grafana/grafana:13.3.0
+    nodeExporterImage: prom/node-exporter:v1.12.1
+    kubeStateMetricsImage: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.20.0
+    retention: 15d
+    route: {host: grafana, service: grafana, port: 3000, lan: false}
+    # Downloaded into Grafana at start, pinned; ${DS_PROMETHEUS} is pointed at the local Prometheus.
+    dashboards:
+      node-exporter-full: https://grafana.com/api/dashboards/1860/revisions/46/download
+      traefik: https://grafana.com/api/dashboards/17346/revisions/9/download
+      crowdsec-overview: https://raw.githubusercontent.com/crowdsecurity/grafana-dashboards/c89d8476b32ea76e924c488db7d0afd0306fc609/dashboards_v5/Crowdsec%20Overview.json
+      crowdsec-lapi: https://raw.githubusercontent.com/crowdsecurity/grafana-dashboards/c89d8476b32ea76e924c488db7d0afd0306fc609/dashboards_v5/LAPI%20Metrics.json
+      crowdsec-machines: https://raw.githubusercontent.com/crowdsecurity/grafana-dashboards/c89d8476b32ea76e924c488db7d0afd0306fc609/dashboards_v5/Crowdsec%20Details%20per%20Machine.json
+    # Alert rules (Grafana alerting, to Telegram): the query returns the measured value and
+    # op/value is the threshold. Summaries use Grafana's {{ $labels.x }} placeholders.
+    alerts:
+      - uid: node-down
+        title: Node exporter down
+        expr: up{job="node"}
+        op: lt
+        value: 1
+        for: 3m
+        summary: "{{ $labels.instance }} stopped reporting metrics"
+      - uid: disk-low
+        title: Disk space low
+        expr: 100 * node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs"} / node_filesystem_size_bytes{fstype=~"ext4|xfs|btrfs"}
+        op: lt
+        value: 15
+        for: 15m
+        summary: "{{ $labels.instance }} {{ $labels.mountpoint }} has under 15% free"
+      - uid: cert-expiry
+        title: Certificate expires soon
+        expr: (max by (cn) (traefik_tls_certs_not_after) - time()) / 86400
+        op: lt
+        value: 14
+        for: 1h
+        summary: "Certificate {{ $labels.cn }} expires in under 14 days: renewal is failing"
+      - uid: pod-crashloop
+        title: Pod restarting
+        expr: increase(kube_pod_container_status_restarts_total[30m])
+        op: gt
+        value: 3
+        for: 5m
+        summary: "{{ $labels.namespace }}/{{ $labels.pod }} restarted more than 3 times in 30 minutes"
+      - uid: deployment-down
+        title: App not ready
+        expr: kube_deployment_status_replicas_available
+        op: lt
+        value: 1
+        for: 10m
+        summary: "{{ $labels.namespace }}/{{ $labels.deployment }} has no ready pod"
+      - uid: on-battery
+        title: Worker on battery
+        expr: max by (instance) (node_power_supply_online{power_supply=~"(?i).*(ac|adp|mains|usb-c).*"})
+        op: lt
+        value: 1
+        for: 2m
+        summary: "{{ $labels.instance }} lost AC power; a drained MacBook stays off until its lid opens"
+      - uid: too-hot
+        title: Node running hot
+        expr: max by (instance) (node_thermal_zone_temp)
+        op: gt
+        value: 75
+        for: 10m
+        summary: "{{ $labels.instance }} is above 75 C"
+      - uid: crowdsec-agent-down
+        title: CrowdSec agent down
+        expr: up{job="crowdsec",pod=~"crowdsec-agent.*"}
+        op: lt
+        value: 1
+        for: 15m
+        summary: "CrowdSec agent {{ $labels.pod }} is down: that node's logs go unread"
+    dashboard:
+      title: Grafana
+      icon: grafana.svg
+      description: Metrics, dashboards and alerts
+      sidecars: [prometheus, kube-state-metrics]
+      podSelector: app=observability
 
   tailscaleOperator:
     namespace: tailscale
@@ -316,7 +391,7 @@ apps:
       # created; a client added here later must also be added in the console.
       clients: [homepage]
       # Apps behind Keycloak sign-in (one shared oauth2-proxy + forward auth, admins only).
-      protect: [homepage, prowlarr, radarr, sonarr, sabnzbd, pihole, dispatcharr]
+      protect: [homepage, prowlarr, radarr, sonarr, sabnzbd, pihole, dispatcharr, observability]
     dashboard:
       title: Keycloak
       sidecars: [postgres]
@@ -327,12 +402,18 @@ apps:
 # Homepage layout: groups and tile order. A tile is an app key above or an extra below.
 dashboard:
   groups:
-    - {name: Infrastructure, columns: 3, tiles: [pihole, samba, ddnsUpdater]}
+    - {name: Infrastructure, columns: 2, tiles: [pihole, ddnsUpdater]}
     - {name: Security, columns: 4, tiles: [keycloak, sso, crowdsec, crowdsecAgents]}
-    - {name: Cluster, columns: 3, tiles: [traefik, coredns, metricsServer, localPath, tailscaleOperator, protonExit]}
+    - {name: Cluster, columns: 4, tiles: [observability, traefik, coredns, metricsServer, localPath, tailscaleOperator, protonExit, nodeExporter]}
     - {name: Media, columns: 3, tiles: [jellyfin, seerr, dispatcharr]}
     - {name: Automation, columns: 4, tiles: [radarr, sonarr, prowlarr, sabnzbd]}
   extras:
+    nodeExporter:
+      title: node-exporter
+      icon: mdi-chip
+      description: Disk, CPU, temperature and power, per node
+      namespace: observability
+      podSelector: app=node-exporter
     sso:
       title: Sign-in proxy
       icon: mdi-shield-key
