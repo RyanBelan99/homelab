@@ -1,0 +1,327 @@
+{{/* CrowdSec: agents parse Traefik's access log and Jellyfin's and Seerr's sign-in failures,
+LAPI keeps the ban list, and Traefik's bouncer plugin (middleware "crowdsec", on public routes
+only) refuses banned IPs. The bouncer key is generated once and kept, like Keycloak's secrets. */}}
+{{- if .Values.public.enabled }}
+{{- $app := .Values.apps.crowdsec }}
+{{- $stored := (lookup "v1" "Secret" $app.namespace "crowdsec-bouncer").data | default dict }}
+{{- $key := (get $stored "key" | b64dec) | default (randAlphaNum 48) }}
+{{- $tg := .Values.secrets.telegram | default dict }}
+{{- $chat := include "homelab.telegramChat" . }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: crowdsec-bouncer
+  namespace: {{ $app.namespace }}
+type: Opaque
+stringData:
+  key: {{ $key | quote }}
+{{- if and $tg.botToken $chat }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: crowdsec-telegram
+  namespace: {{ $app.namespace }}
+type: Opaque
+stringData:
+  botToken: {{ $tg.botToken | quote }}
+  chatId: {{ $chat | quote }}
+{{- end }}
+{{- with (.Values.secrets.crowdsec | default dict).enrollKey }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: crowdsec-console
+  namespace: {{ $app.namespace }}
+type: Opaque
+stringData:
+  key: {{ . | quote }}
+{{- end }}
+---
+# Installed by k3s's helm-controller, like Traefik.
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: crowdsec
+  namespace: {{ $app.namespace }}
+spec:
+  repo: https://crowdsecurity.github.io/helm-charts
+  chart: crowdsec
+  version: {{ $app.chartVersion }}
+  targetNamespace: {{ $app.namespace }}
+  valuesContent: |-
+    container_runtime: containerd
+    lapi:
+      env:
+        # Registers the Traefik bouncer with this key on start.
+        - name: BOUNCER_KEY_traefik
+          valueFrom:
+            secretKeyRef:
+              name: crowdsec-bouncer
+              key: key
+        {{- with (.Values.secrets.crowdsec | default dict).enrollKey }}
+        # Free Console (app.crowdsec.net): enrolls on start; accept the instance there once.
+        - name: ENROLL_KEY
+          valueFrom:
+            secretKeyRef:
+              name: crowdsec-console
+              key: key
+        - name: ENROLL_INSTANCE_NAME
+          value: {{ (index $.Values.nodes $app.node).name }}
+        - name: ENROLL_TAGS
+          value: "k3s homelab"
+        {{- end }}
+        {{- if and $tg.botToken $chat }}
+        # Read by the telegram notification below (CrowdSec expands ${VAR} in its URL).
+        - name: TELEGRAM_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: crowdsec-telegram
+              key: botToken
+        - name: TELEGRAM_CHAT_ID
+          valueFrom:
+            secretKeyRef:
+              name: crowdsec-telegram
+              key: chatId
+        {{- end }}
+      nodeSelector:
+        kubernetes.io/hostname: {{ (index .Values.nodes $app.node).name }}
+      persistentVolume:
+        data:
+          storageClassName: local-path
+        config:
+          storageClassName: local-path
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          memory: 384Mi
+    agent:
+      # One per node: each reads the container logs of the pods on its own node. The files in
+      # /var/log/containers are symlinks, which inotify can't follow across log rotation: poll.
+      acquisition:
+        - namespace: {{ .Values.apps.traefik.namespace }}
+          podName: traefik-*
+          program: traefik
+          poll_without_inotify: true
+        - namespace: {{ .Values.apps.jellyfin.namespace }}
+          podName: jellyfin-*
+          program: jellyfin
+          poll_without_inotify: true
+        - namespace: {{ .Values.apps.seerr.namespace }}
+          podName: seerr-*
+          program: jellyseerr
+          poll_without_inotify: true
+      env:
+        - name: COLLECTIONS
+          value: {{ join " " $app.collections | quote }}
+        # k3s writes container logs in containerd's CRI format.
+        - name: PARSERS
+          value: crowdsecurity/cri-logs
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 256Mi
+    config:
+      # Replaces the chart's default: self-registration only from localhost and the pod
+      # network, and registrations unused for 7 days are deleted (agent pods that were
+      # replaced, for example after a reboot, leave their old name behind).
+      config.yaml.local: |
+        api:
+          server:
+            auto_registration:
+              enabled: true
+              token: "${REGISTRATION_TOKEN}"
+              allowed_ranges: ["127.0.0.1/32", "{{ .Values.network.podCIDR }}"]
+        db_config:
+          flush:
+            agents_autodelete:
+              login_password: 168h
+      {{- if and $tg.botToken $chat }}
+      # The image's default profiles (ban IPs and ranges for 4 h), plus a Telegram message for
+      # each ban CrowdSec decides here. Community blocklist entries never notify.
+      profiles.yaml: |
+        name: default_ip_remediation
+        filters:
+          - Alert.Remediation == true && Alert.GetScope() == "Ip"
+        decisions:
+          - type: ban
+            duration: 4h
+        notifications: [telegram]
+        on_success: break
+        ---
+        name: default_range_remediation
+        filters:
+          - Alert.Remediation == true && Alert.GetScope() == "Range"
+        decisions:
+          - type: ban
+            duration: 4h
+        notifications: [telegram]
+        on_success: break
+      notifications:
+        # One plain-text message per 30 s burst (a scan trips several scenarios at once), at
+        # most 15 alerts each, well under Telegram's 4096 characters.
+        telegram.yaml: |
+          type: http
+          name: telegram
+          log_level: info
+          group_wait: 30s
+          group_threshold: 15
+          # ${VAR} is expanded in these settings but not in format, so the chat ID rides in the URL.
+          url: https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${TELEGRAM_CHAT_ID}
+          method: POST
+          headers:
+            Content-Type: application/json
+          format: |
+            {{`{"text": "🛡️ CrowdSec banned an attacker on the public sites{{ range . }}\n• {{ .Source.Value }} ({{ .Source.Cn | default "?" }}{{ with .Source.AsName }}, {{ . | replace "\\" "" | replace "\"" "'" }}{{ end }}): {{ .Scenario | trimPrefix "crowdsecurity/" }}, {{ .EventsCount }} requests{{ range .Decisions }}, {{ .Type }} {{ .Duration }}{{ end }}{{ end }}\nUndo: cscli decisions delete --ip <ip>"}`}}
+      {{- end }}
+      parsers:
+        s01-parse:
+          # The hub's LePresidente/jellyseerr-logs only knows "Failed login attempt"; Seerr v3
+          # logs "Failed sign-in attempt". Same log_type, so LePresidente/jellyseerr-bf still fires.
+          homelab-seerr-logs.yaml: |
+            onsuccess: next_stage
+            name: homelab/seerr-logs
+            description: "Seerr v3 failed sign-ins"
+            filter: "evt.Parsed.program == 'jellyseerr'"
+            pattern_syntax:
+              SEERR_USER: "(?:%{EMAILADDRESS}|%{USERNAME})"
+            nodes:
+              - grok:
+                  pattern: '%{RFC3339:timestamp}.*Failed (?:login|sign-in) attempt from user with incorrect.*credentials {"account":{"ip":"(?:::ffff:)?%{IP:source_ip}","email":"%{SEERR_USER:username}"'
+                  apply_on: message
+              - grok:
+                  pattern: '%{RFC3339:timestamp}.*Failed sign-in attempt using invalid .* password.*{"ip":"(?:::ffff:)?%{IP:source_ip}","email":"%{SEERR_USER:username}"'
+                  apply_on: message
+            statics:
+              - meta: log_type
+                value: jellyseerr_failed_auth
+              - meta: service
+                value: jellyseerr
+              - meta: source_ip
+                expression: "evt.Parsed.source_ip"
+              - meta: user
+                expression: "evt.Parsed.username"
+              - target: evt.StrTime
+                expression: evt.Parsed.timestamp
+        s02-enrich:
+          # crowdsecurity/whitelists already covers private ranges; add the tailnet.
+          homelab-trusted.yaml: |
+            name: homelab/trusted
+            description: "Never ban the home LAN, pods or the tailnet"
+            whitelist:
+              reason: "homelab trusted networks"
+              cidr: {{ toJson $app.trusted }}
+---
+# After a node reboot a DaemonSet pod comes back with the same name, and the chart's
+# registration step fails with "user already exist" forever
+# (https://github.com/crowdsecurity/helm-charts/issues/252). Deleting the pod gives it a
+# new name, which registers fine: do that for any agent whose registration keeps failing.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: crowdsec-agent-watchdog
+  namespace: {{ $app.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: crowdsec-agent-watchdog
+  namespace: {{ $app.namespace }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: crowdsec-agent-watchdog
+  namespace: {{ $app.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: crowdsec-agent-watchdog
+subjects:
+  - kind: ServiceAccount
+    name: crowdsec-agent-watchdog
+    namespace: {{ $app.namespace }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: crowdsec-agent-watchdog
+  namespace: {{ $app.namespace }}
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 0
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 120
+      ttlSecondsAfterFinished: 300
+      template:
+        spec:
+          serviceAccountName: crowdsec-agent-watchdog
+          restartPolicy: Never
+          {{- include "homelab.nodeSelector" (list . "worker") | nindent 10 }}
+          containers:
+            - name: watchdog
+              image: {{ $app.watchdogImage }}
+              command:
+                - sh
+                - -c
+                - |
+                  kubectl -n {{ $app.namespace }} get pods -l type=agent \
+                    -o jsonpath='{range .items[*]}{.metadata.name} {.status.initContainerStatuses[0].restartCount}{"\n"}{end}' |
+                  while read -r pod restarts; do
+                    if [ "${restarts:-0}" -ge 3 ]; then
+                      echo "deleting $pod: registration failed $restarts times"
+                      kubectl -n {{ $app.namespace }} delete pod "$pod" --wait=false
+                    fi
+                  done
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 128Mi
+{{- /* The bouncer middleware and its key, in every namespace with a public app. */}}
+{{- $namespaces := dict }}
+{{- range .Values.apps }}{{ if .public }}{{ $_ := set $namespaces .namespace true }}{{ end }}{{ end }}
+{{- range $ns, $_ := $namespaces }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: crowdsec-bouncer
+  namespace: {{ $ns }}
+type: Opaque
+stringData:
+  key: {{ $key | quote }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: crowdsec
+  namespace: {{ $ns }}
+spec:
+  plugin:
+    crowdsec-bouncer:
+      enabled: true
+      # Stream: keep the ban list in Traefik and refresh it every minute (no call per request).
+      crowdsecMode: stream
+      updateIntervalSeconds: 60
+      updateMaxFailure: {{ $app.updateMaxFailure }}
+      crowdsecLapiHost: crowdsec-service.{{ $app.namespace }}.svc.cluster.local:8080
+      # Read by Traefik from the Secret in this namespace.
+      crowdsecLapiKey: urn:k8s:secret:crowdsec-bouncer:key
+      clientTrustedIPs: {{ toJson $app.trusted }}
+{{- end }}
+{{- end }}

@@ -27,13 +27,23 @@ runAsUser: {{ .Values.admin.uid }}
 runAsGroup: {{ .Values.admin.gid }}
 {{- end }}
 
-{{/* hostPath volume under paths.config. Usage: include "homelab.configVolume" (list $ "name" "sub/path") */}}
+{{/* Node-bound volume under paths.config (see storage.yaml). Usage: include "homelab.configVolume" (list $ "name" "sub/path") */}}
 {{- define "homelab.configVolume" -}}
-{{- $root := index . 0 -}}
 - name: {{ index . 1 }}
-  hostPath:
-    path: {{ $root.Values.paths.config }}/{{ index . 2 }}
-    type: Directory
+  persistentVolumeClaim:
+    claimName: {{ include "homelab.claimName" (list "config" (index . 2)) }}
+{{- end }}
+
+{{/* Node-bound volume under paths.data, "" for the whole folder. Usage: include "homelab.dataVolume" (list $ "name" "sub/path") */}}
+{{- define "homelab.dataVolume" -}}
+- name: {{ index . 1 }}
+  persistentVolumeClaim:
+    claimName: {{ include "homelab.claimName" (list "data" (index . 2)) }}
+{{- end }}
+
+{{/* Claim name for a storage.volumes entry: config + jellyfin/cache -> config-jellyfin-cache. */}}
+{{- define "homelab.claimName" -}}
+{{- $base := index . 0 | kebabcase }}{{ with index . 1 }}{{ $base }}-{{ . | replace "/" "-" }}{{ else }}{{ $base }}{{ end -}}
 {{- end }}
 
 {{/*
@@ -97,8 +107,33 @@ Usage: include "homelab.gluetun" (dict "root" $ "image" "..." "secret" "..." "en
     type: CharDevice
 {{- end }}
 
+{{/*
+OIDC client secret for an app key: the stored value if the oidc-clients Secret has it,
+else generated once per render and cached on .Values, so Keycloak's copy and the app's
+oauth2-proxy copy always match. Usage: include "homelab.oidcClientSecret" (list $ "homepage")
+*/}}
+{{- define "homelab.oidcClientSecret" -}}
+{{- $root := index . 0 -}}
+{{- $env := printf "CLIENT_SECRET_%s" (index . 1 | snakecase | upper) -}}
+{{- if not (hasKey $root.Values "_oidcCache") }}{{ $_ := set $root.Values "_oidcCache" (dict) }}{{ end -}}
+{{- if not (hasKey $root.Values._oidcCache $env) -}}
+{{- $stored := (lookup "v1" "Secret" $root.Values.apps.keycloak.namespace "oidc-clients").data | default dict -}}
+{{- $_ := set $root.Values._oidcCache $env ((get $stored $env | b64dec) | default (randAlphaNum 40)) -}}
+{{- end -}}
+{{- get $root.Values._oidcCache $env -}}
+{{- end }}
+
 {{/* Namespaces and data volumes survive `helm uninstall`. */}}
 {{- define "homelab.keepAnnotation" -}}
 annotations:
   helm.sh/resource-policy: keep
+{{- end }}
+
+{{/*
+Telegram chat ID from secrets.telegram as a string, empty if unset. An unquoted ID is a YAML
+number, which Helm would render as 1.23e+09: keep it whole. Usage: include "homelab.telegramChat" .
+*/}}
+{{- define "homelab.telegramChat" -}}
+{{- $id := (.Values.secrets.telegram | default dict).chatId -}}
+{{- if kindIs "string" $id }}{{ $id }}{{ else if $id }}{{ $id | int64 }}{{ end -}}
 {{- end }}

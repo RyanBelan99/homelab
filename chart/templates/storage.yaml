@@ -1,0 +1,56 @@
+{{/*
+Node-bound volumes for the folders in storage.volumes: a "local" PersistentVolume per folder,
+pinned to the node that holds it and pre-bound to one claim in the app's namespace. The data
+stays where it is; nothing is provisioned, copied or deleted (Retain, and kept on uninstall).
+*/}}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-config
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+{{- range .Values.storage.volumes }}
+{{- $app := index $.Values.apps .app }}
+{{- $claim := include "homelab.claimName" (list .base .path) }}
+{{- $pv := printf "%s-%s" $app.namespace $claim }}
+{{- $root := index $.Values.paths .base }}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ $pv }}
+  {{- include "homelab.keepAnnotation" $ | nindent 2 }}
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-config
+  claimRef:
+    namespace: {{ $app.namespace }}
+    name: {{ $claim }}
+  local:
+    path: {{ $root }}{{ with .path }}/{{ . }}{{ end }}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: [{{ (index $.Values.nodes $app.node).name }}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $claim }}
+  namespace: {{ $app.namespace }}
+  {{- include "homelab.keepAnnotation" $ | nindent 2 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-config
+  volumeName: {{ $pv }}
+  resources:
+    requests:
+      storage: 1Gi
+{{- end }}

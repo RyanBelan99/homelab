@@ -59,8 +59,5 @@ spec:
             - name: state
               mountPath: /var/lib/tailscale
       volumes:
-        - name: state
-          hostPath:
-            path: {{ .Values.paths.config }}/proton-exit
-            type: DirectoryOrCreate
+        {{- include "homelab.configVolume" (list . "state" "proton-exit") | nindent 8 }}
         {{- include "homelab.tunVolume" . | nindent 8 }}

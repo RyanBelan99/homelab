@@ -21,7 +21,57 @@ spec:
             - {{ .Values.network.podGateway }}/32
       websecure:
         expose:
-          default: false
+          default: {{ .Values.public.enabled }}
+        # Clients connect directly (router forward, ServiceLB with Local policy): trust no
+        # X-Forwarded-* here, so Traefik and Jellyfin see the real client IP.
+    {{- if .Values.public.enabled }}
+    # acme.json survives restarts; Let's Encrypt limits re-issuing the same name.
+    persistence:
+      enabled: true
+      storageClass: local-path
+      size: 128Mi
+    {{- $provider := .Values.public.provider }}
+    {{- $prefix := upper $provider }}
+    env:
+      - name: {{ $prefix }}_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: public-dns
+            key: TOKEN
+      # Free DNS hosts can be slow to publish the challenge record.
+      - name: {{ $prefix }}_PROPAGATION_TIMEOUT
+        value: "300"
+    certificatesResolvers:
+      {{- range $name, $server := dict "le-staging" "https://acme-staging-v02.api.letsencrypt.org/directory" "le" "https://acme-v02.api.letsencrypt.org/directory" }}
+      {{ $name }}:
+        acme:
+          caServer: {{ $server }}
+          storage: /data/acme-{{ $name }}.json
+          dnsChallenge:
+            provider: {{ $provider }}
+            # Public resolvers: Pi-hole answers the name locally, which would fool the check.
+            resolvers: ["1.1.1.1:53", "9.9.9.9:53"]
+      {{- end }}
+    {{- end }}
+    {{- if .Values.public.enabled }}
+    # JSON access log on stdout for CrowdSec. Query strings are dropped: Jellyfin clients put
+    # their api_key in stream URLs. User-Agent is kept for the bad-user-agent scenarios.
+    accessLog:
+      enabled: true
+      format: json
+      fields:
+        headers:
+          defaultMode: drop
+          names:
+            User-Agent: keep
+        queryParameters:
+          defaultMode: drop
+    experimental:
+      plugins:
+        crowdsec-bouncer:
+          moduleName: github.com/maxlerebourg/crowdsec-bouncer-traefik-plugin
+          version: {{ .Values.apps.crowdsec.bouncerPlugin }}
+    {{- end }}
     service:
       spec:
         type: LoadBalancer
@@ -31,9 +81,10 @@ spec:
     ingressClass:
       enabled: true
       isDefaultClass: true
+    # ~150Mi before the CrowdSec plugin; plugins run in an interpreter and add to that.
     resources:
       requests:
         cpu: 50m
-        memory: 64Mi
+        memory: 160Mi
       limits:
-        memory: 256Mi
+        memory: 512Mi

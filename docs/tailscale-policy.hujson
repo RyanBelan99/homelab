@@ -2,7 +2,8 @@
 // Roles come from the console's Users page: admins are autogroup:admin, everyone else a member.
 {
 	"hosts": {
-		"pihole-dns": "192.168.0.34",
+		"pihole-dns":  "192.168.0.34",
+		"traefik-lan": "192.168.0.34",
 	},
 
 	"tagOwners": {
@@ -23,9 +24,11 @@
 			"svc:radarr":      ["tag:homelab"],
 			"svc:sonarr":      ["tag:homelab"],
 			"svc:prowlarr":    ["tag:homelab"],
-			"svc:qbit":        ["tag:homelab"],
+			"svc:sabnzbd":     ["tag:homelab"],
 			"svc:pihole":      ["tag:homelab"],
 			"svc:dispatcharr": ["tag:homelab"],
+			"svc:auth":        ["tag:homelab"],
+			"svc:grafana":     ["tag:homelab"],
 		},
 	},
 
@@ -34,12 +37,14 @@
 		{"src": ["autogroup:member"], "dst": ["autogroup:self"], "ip": ["*"]},
 		{"src": ["autogroup:member"], "dst": ["svc:jellyfin", "svc:seerr"], "ip": ["tcp:443"]},
 		{"src": ["autogroup:member"], "dst": ["pihole-dns"], "ip": ["tcp:53", "udp:53"]},
+		// Members: the public name over the subnet route (Pi-hole answers it with the LAN IP).
+		{"src": ["autogroup:member"], "dst": ["traefik-lan"], "ip": ["tcp:443"]},
 		{"src": ["autogroup:member"], "dst": ["autogroup:internet"], "ip": ["*"], "via": ["tag:exit-proton"]},
 
 		// Admins: every app.
 		{
 			"src": ["autogroup:admin"],
-			"dst": ["svc:home", "svc:radarr", "svc:sonarr", "svc:prowlarr", "svc:qbit", "svc:pihole", "svc:dispatcharr"],
+			"dst": ["svc:home", "svc:radarr", "svc:sonarr", "svc:prowlarr", "svc:sabnzbd", "svc:pihole", "svc:dispatcharr", "svc:auth", "svc:grafana"],
 			"ip":  ["tcp:443"],
 		},
 		// Admins: kubectl through the operator's API proxy, impersonated as cluster-admin.
@@ -51,8 +56,8 @@
 				"tailscale.com/cap/kubernetes": [{"impersonate": {"groups": ["system:masters"]}}],
 			},
 		},
-		// Admins: SSH, SMB, and the k3s API directly (break-glass).
-		{"src": ["autogroup:admin"], "dst": ["tag:homelab"], "ip": ["tcp:22", "tcp:6443", "tcp:445"]},
+		// Admins: SSH and the k3s API directly (break-glass).
+		{"src": ["autogroup:admin"], "dst": ["tag:homelab"], "ip": ["tcp:22", "tcp:6443"]},
 		// Admins: either exit node.
 		{"src": ["autogroup:admin"], "dst": ["autogroup:internet"], "ip": ["*"]},
 	],

@@ -1,6 +1,14 @@
-{{/* One Traefik route per app with a route: <host>.<localDomain> on the LAN, <host>.<tailnet> via its Tailscale Service. */}}
+{{/* One Traefik route per app with a route: <host>.<tailnet> via its Tailscale Service, plus
+<host>.<localDomain> on the LAN unless route.lan is false. The LAN path has no Tailscale policy,
+so admin apps turn it off and stay reachable only through the tailnet. */}}
 {{- range $name, $app := .Values.apps }}
 {{- with $app.route }}
+{{- $lan := true }}
+{{- if hasKey . "lan" }}{{ $lan = .lan }}{{ end }}
+{{- $middlewares := .middlewares | default list }}
+{{- if has $name ($.Values.apps.keycloak.sso.protect | default list) }}
+{{- $middlewares = concat $middlewares (list (dict "name" "sso-https") (dict "name" "sso")) }}
+{{- end }}
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
@@ -10,8 +18,12 @@ metadata:
 spec:
   entryPoints: [web]
   routes:
-    - match: 'Host(`{{ .host }}.{{ $.Values.network.localDomain }}`) || HostRegexp(`^{{ .host }}\..+\.ts\.net$`)'
+    - match: '{{ if $lan }}Host(`{{ .host }}.{{ $.Values.network.localDomain }}`) || {{ end }}HostRegexp(`^{{ .host }}\..+\.ts\.net$`)'
       kind: Rule
+      {{- with $middlewares }}
+      middlewares:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       services:
         - name: {{ .service }}
           port: {{ .port }}

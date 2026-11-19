@@ -1,5 +1,5 @@
 # Real secrets, never commit (template: secrets.example.yaml)
-secrets.yaml
+/secrets.yaml
 **/10-secret.yaml
 secrets/
 CREDENTIALS.txt

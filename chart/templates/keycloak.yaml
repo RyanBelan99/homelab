@@ -1,0 +1,244 @@
+{{- with .Values.apps.keycloak }}
+{{- $app := . }}
+{{- $tailnet := $.Values.secrets.tailnet }}
+{{- /* Generated once, then kept across upgrades: no password lives in the repo or secrets.yaml. */}}
+{{- $existing := (lookup "v1" "Secret" $app.namespace "keycloak-secrets").data | default dict }}
+{{- $dbPassword := (get $existing "DB_PASSWORD" | b64dec) | default (randAlphaNum 32) }}
+{{- $adminPassword := (get $existing "KC_BOOTSTRAP_ADMIN_PASSWORD" | b64dec) | default (randAlphaNum 32) }}
+{{- /* One OIDC client per app in sso.clients, named after its route host (https://<host>.<tailnet>). */}}
+{{- $clients := list }}
+{{- range $key := $app.sso.clients }}
+{{- $target := index $.Values.apps $key }}
+{{- $env := printf "CLIENT_SECRET_%s" ($key | snakecase | upper) }}
+{{- $clients = append $clients (dict "key" $key "host" $target.route.host "env" $env "secret" (include "homelab.oidcClientSecret" (list $ $key))) }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-secrets
+  namespace: {{ $app.namespace }}
+  {{- include "homelab.keepAnnotation" $ | nindent 2 }}
+type: Opaque
+stringData:
+  DB_PASSWORD: {{ $dbPassword | quote }}
+  # Temporary admin: sign in once, create your own admin user, then delete this one.
+  KC_BOOTSTRAP_ADMIN_USERNAME: bootstrap-admin
+  KC_BOOTSTRAP_ADMIN_PASSWORD: {{ $adminPassword | quote }}
+---
+# OIDC client secrets, shared by Keycloak (realm import) and the shared oauth2-proxy.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: oidc-clients
+  namespace: {{ $app.namespace }}
+  {{- include "homelab.keepAnnotation" $ | nindent 2 }}
+type: Opaque
+stringData:
+  {{- range $clients }}
+  {{ .env }}: {{ .secret | quote }}
+  {{- end }}
+---
+# The homelab realm, imported once on the first start without it (Keycloak skips
+# existing realms). Users are created in the console; secrets resolve from env.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm
+  namespace: {{ $app.namespace }}
+data:
+  homelab-realm.json: |
+    {{- $clientDefs := list }}
+    {{- range $clients }}
+    {{- $url := printf "https://%s.%s" .host $tailnet }}
+    {{- $clientDefs = append $clientDefs (dict
+        "clientId" .host
+        "name" .key
+        "enabled" true
+        "protocol" "openid-connect"
+        "publicClient" false
+        "clientAuthenticatorType" "client-secret"
+        "secret" (printf "${%s}" .env)
+        "standardFlowEnabled" true
+        "directAccessGrantsEnabled" false
+        "implicitFlowEnabled" false
+        "serviceAccountsEnabled" false
+        "fullScopeAllowed" false
+        "rootUrl" $url
+        "redirectUris" (list (printf "%s/oauth2/callback" $url))
+        "webOrigins" (list $url)
+        "attributes" (dict "pkce.code.challenge.method" "S256" "post.logout.redirect.uris" (printf "%s/*" $url))
+        "protocolMappers" (list
+          (dict "name" "groups" "protocol" "openid-connect" "protocolMapper" "oidc-group-membership-mapper"
+                "config" (dict "claim.name" "groups" "full.path" "false" "id.token.claim" "true" "access.token.claim" "true" "userinfo.token.claim" "true"))
+          (dict "name" "audience" "protocol" "openid-connect" "protocolMapper" "oidc-audience-mapper"
+                "config" (dict "included.client.audience" .host "access.token.claim" "true" "id.token.claim" "false"))
+        )) }}
+    {{- end }}
+    {{- dict
+        "realm" "homelab"
+        "displayName" "Homelab"
+        "enabled" true
+        "sslRequired" "external"
+        "registrationAllowed" false
+        "resetPasswordAllowed" false
+        "loginWithEmailAllowed" true
+        "bruteForceProtected" true
+        "failureFactor" 10
+        "permanentLockout" false
+        "groups" (list (dict "name" "admins") (dict "name" "members"))
+        "clients" $clientDefs
+      | toPrettyJson | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: {{ $app.namespace }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      {{- include "homelab.nodeSelector" (list $ $app.node) | nindent 6 }}
+      # Postgres runs as a native sidecar: it starts before Keycloak (which exits without a
+      # database), keeps running beside it, and stops after it. Recreate (above) keeps a
+      # single Postgres on the data directory.
+      initContainers:
+        - name: postgres
+          image: {{ $app.postgresImage }}
+          restartPolicy: Always
+          env:
+            {{- include "homelab.tz" $ | nindent 12 }}
+            - name: POSTGRES_DB
+              value: keycloak
+            - name: POSTGRES_USER
+              value: keycloak
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: keycloak-secrets, key: DB_PASSWORD}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "keycloak", "-d", "keycloak"]
+            periodSeconds: 2
+            failureThreshold: 90
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "keycloak", "-d", "keycloak"]
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: db
+              mountPath: /var/lib/postgresql/data
+      containers:
+        - name: keycloak
+          image: {{ $app.image }}
+          args: ["start", "--import-realm"]
+          envFrom:
+            - secretRef:
+                name: oidc-clients
+          env:
+            {{- include "homelab.tz" $ | nindent 12 }}
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL
+              value: jdbc:postgresql://127.0.0.1:5432/keycloak
+            - name: KC_DB_USERNAME
+              value: keycloak
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: keycloak-secrets, key: DB_PASSWORD}
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef: {name: keycloak-secrets, key: KC_BOOTSTRAP_ADMIN_USERNAME}
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: keycloak-secrets, key: KC_BOOTSTRAP_ADMIN_PASSWORD}
+            # Browsers use the tailnet HTTPS name (TLS ends at tailscale serve); in-cluster
+            # clients such as oauth2-proxy use http://keycloak.{{ $app.namespace }}:8080.
+            - name: KC_HOSTNAME
+              value: https://{{ $app.route.host }}.{{ $tailnet }}
+            - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
+              value: "true"
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+          startupProbe:
+            httpGet:
+              path: /health/started
+              port: management
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: management
+            periodSeconds: 60
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 1536Mi
+          volumeMounts:
+            - name: realm
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+      volumes:
+        - name: realm
+          configMap:
+            name: keycloak-realm
+        {{- include "homelab.configVolume" (list $ "db" "keycloak/postgres") | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: {{ $app.namespace }}
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+# The route is tailnet-only and tailscale serve always terminates HTTPS, so tell
+# Keycloak the original scheme; otherwise it rejects sign-ins as "HTTPS required".
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: forwarded-https
+  namespace: {{ $app.namespace }}
+spec:
+  headers:
+    customRequestHeaders:
+      X-Forwarded-Proto: https
+{{- end }}

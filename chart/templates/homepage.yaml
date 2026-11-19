@@ -36,74 +36,7 @@ kind: ConfigMap
 metadata:
   name: homepage
   namespace: {{ $app.namespace }}
-data:
-  kubernetes.yaml: |
-    mode: cluster
-    ingress: false
-    traefik: true
-    gateway: false
-  settings.yaml: |
-    title: {{ $app.title }}
-    theme: dark
-    color: slate
-    headerStyle: clean
-    statusStyle: dot
-    hideVersion: true
-    showStats: true
-    layout:
-    {{- range .Values.dashboard.groups }}
-      {{ .name }}:
-        style: row
-        columns: {{ .columns }}
-    {{- end }}
-  widgets.yaml: |
-    - kubernetes:
-        cluster:
-          show: true
-          cpu: true
-          memory: true
-          showLabel: true
-          label: cluster
-        nodes:
-          show: true
-          cpu: true
-          memory: true
-          showLabel: true
-    - datetime:
-        text_size: md
-        format:
-          dateStyle: medium
-          timeStyle: short
-  # Tiles link to each app's Tailscale Service; widgets call the in-cluster address.
-  services.yaml: |
-    {{- range .Values.dashboard.groups }}
-    - {{ .name }}:
-      {{- range $key := .tiles }}
-      {{- $a := index $.Values.apps $key | default dict }}
-      {{- $t := $a.dashboard | default (index $.Values.dashboard.extras $key) }}
-      {{- $label := $t.appLabel | default $key | kebabcase }}
-        - {{ $t.title }}:
-            icon: {{ $t.icon }}
-            {{- with $a.route }}
-            href: https://{{ .host }}.{{ $tailnet }}{{ $t.path | default "/" }}
-            {{- end }}
-            description: {{ tpl $t.description $ }}
-            namespace: {{ $a.namespace | default $t.namespace }}
-            app: {{ $label }}
-            podSelector: {{ $t.podSelector | default (printf "app=%s" $label) }}
-            {{- with $t.widget }}
-            widget:
-              {{- range $k, $v := omit . "keyVar" }}
-              {{ $k }}: {{ if kindIs "slice" $v }}[{{ join ", " $v }}]{{ else }}{{ $v }}{{ end }}
-              {{- end }}
-              key: "{{ "{{" }}HOMEPAGE_VAR_{{ .keyVar }}{{ "}}" }}"
-            {{- end }}
-      {{- end }}
-    {{- end }}
-  bookmarks.yaml: ""
-  docker.yaml: ""
-  custom.css: ""
-  custom.js: ""
+data:{{ include "homelab.homepageConfig" . }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -122,6 +55,11 @@ spec:
     metadata:
       labels:
         app: homepage
+      # seed-config copies the config and Homepage reads widget keys only at start:
+      # restart when either changes.
+      annotations:
+        checksum/config: {{ include "homelab.homepageConfig" . | sha256sum }}
+        checksum/widget-keys: {{ toJson (dict "keys" .Values.secrets.homepage "tailnet" .Values.secrets.tailnet) | sha256sum }}
     spec:
       serviceAccountName: homepage
       automountServiceAccountToken: true
@@ -187,3 +125,84 @@ spec:
     - name: web
       port: 3000
       targetPort: 3000
+{{- /* Homepage config files (the ConfigMap data), also hashed into the pod template. */}}
+{{- define "homelab.homepageConfig" }}
+{{- $app := .Values.apps.homepage }}
+{{- $tailnet := .Values.secrets.tailnet }}
+  kubernetes.yaml: |
+    mode: cluster
+    ingress: false
+    traefik: true
+    gateway: false
+  settings.yaml: |
+    title: {{ $app.title }}
+    theme: dark
+    color: slate
+    headerStyle: clean
+    statusStyle: dot
+    hideVersion: true
+    showStats: true
+    layout:
+    {{- range .Values.dashboard.groups }}
+      {{ .name }}:
+        style: row
+        columns: {{ .columns }}
+    {{- end }}
+  widgets.yaml: |
+    - kubernetes:
+        cluster:
+          show: true
+          cpu: true
+          memory: true
+          showLabel: true
+          label: cluster
+        nodes:
+          show: true
+          cpu: true
+          memory: true
+          showLabel: true
+    - datetime:
+        text_size: md
+        format:
+          dateStyle: medium
+          timeStyle: short
+  # Tiles link to each app's Tailscale Service; widgets call the in-cluster address.
+  services.yaml: |
+    {{- range .Values.dashboard.groups }}
+    - {{ .name }}:
+      {{- range $key := .tiles }}
+      {{- $a := index $.Values.apps $key | default dict }}
+      {{- $t := $a.dashboard | default (index $.Values.dashboard.extras $key) }}
+      {{- $label := $t.appLabel | default $key | kebabcase }}
+        - {{ $t.title }}:
+            icon: {{ $t.icon }}
+            {{- if $a.route }}
+            href: https://{{ $a.route.host }}.{{ $tailnet }}{{ $t.path | default "/" }}
+            {{- else if $t.href }}
+            href: {{ $t.href }}
+            {{- end }}
+            {{- /* Helper containers in the same pod, so the tile says what else runs with it. */}}
+            description: {{ printf "%s%s" (tpl $t.description $) (ternary (printf " · sidecars: %s" (join ", " ($t.sidecars | default list))) "" (not (empty $t.sidecars))) | quote }}
+            namespace: {{ $a.namespace | default $t.namespace }}
+            app: {{ $label }}
+            podSelector: {{ $t.podSelector | default (printf "app=%s" $label) }}
+            {{- with $t.widget }}
+            widget:
+              {{- range $k, $v := omit . "keyVar" "passwordVar" }}
+              {{ $k }}: {{ if kindIs "slice" $v }}[{{ join ", " $v }}]{{ else }}{{ $v }}{{ end }}
+              {{- end }}
+              {{- /* Secrets stay in the homepage-widgets Secret; Homepage substitutes them. */}}
+              {{- with .keyVar }}
+              key: "{{ "{{" }}HOMEPAGE_VAR_{{ . }}{{ "}}" }}"
+              {{- end }}
+              {{- with .passwordVar }}
+              password: "{{ "{{" }}HOMEPAGE_VAR_{{ . }}{{ "}}" }}"
+              {{- end }}
+            {{- end }}
+      {{- end }}
+    {{- end }}
+  bookmarks.yaml: ""
+  docker.yaml: ""
+  custom.css: ""
+  custom.js: ""
+{{- end }}

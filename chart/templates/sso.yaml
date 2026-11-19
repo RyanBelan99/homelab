@@ -1,0 +1,193 @@
+{{/*
+Single sign-on in front of every app in keycloak.sso.protect: one shared oauth2-proxy in
+Keycloak's namespace, with one cookie for the whole tailnet domain (ts.net is a public
+suffix, so <tailnet>.ts.net is a registrable domain that cookies can cover).
+
+- Each app's route gets forward-auth middlewares in its own namespace (Traefik here does
+  not allow cross-namespace middleware references; a URL is fine).
+- Sign-in always completes at the sso.client app's host (/oauth2/callback), the one
+  redirect URI that Keycloak client allows; the proxy then sends you back to the app.
+- /oauth2/ on every protected host goes straight to the proxy (sign-out, callback).
+*/}}
+{{- with .Values.apps.keycloak }}
+{{- $kc := . }}
+{{- $tailnet := $.Values.secrets.tailnet }}
+{{- $issuer := printf "https://%s.%s/realms/homelab" $kc.route.host $tailnet }}
+{{- $internal := printf "http://keycloak.%s:8080/realms/homelab/protocol/openid-connect" $kc.namespace }}
+{{- $client := index $.Values.apps $kc.sso.client }}
+{{- $callbackHost := $client.route.host }}
+{{- $name := "oauth2-proxy" }}
+{{- $stored := (lookup "v1" "Secret" $kc.namespace $name).data | default dict }}
+{{- $hosts := list }}
+{{- $namespaces := dict }}
+{{- range $key := $kc.sso.protect }}
+{{- $app := index $.Values.apps $key }}
+{{- $hosts = append $hosts $app.route.host }}
+{{- $_ := set $namespaces $app.namespace true }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  namespace: {{ $kc.namespace }}
+type: Opaque
+stringData:
+  OAUTH2_PROXY_CLIENT_SECRET: {{ include "homelab.oidcClientSecret" (list $ $kc.sso.client) | quote }}
+  OAUTH2_PROXY_COOKIE_SECRET: {{ (get $stored "OAUTH2_PROXY_COOKIE_SECRET" | b64dec) | default (randAlphaNum 32) | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $kc.namespace }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+    spec:
+      {{- include "homelab.nodeSelector" (list $ $kc.node) | nindent 6 }}
+      # Sessions live in Redis, so the browser holds only a small ticket cookie. The full
+      # session (Keycloak's tokens) is over 4 KB, and as split cookies sent to every app on
+      # the tailnet domain it made Homepage and Pi-hole reject requests (431/400).
+      # Memory only, localhost only: a restart just means signing in again.
+      initContainers:
+        - name: redis
+          image: {{ $kc.redisImage }}
+          restartPolicy: Always
+          command: ["redis-server", "--bind", "127.0.0.1", "--port", "6379", "--save", "", "--appendonly", "no", "--maxmemory", "32mb", "--maxmemory-policy", "allkeys-lru"]
+          startupProbe:
+            exec:
+              command: ["redis-cli", "-h", "127.0.0.1", "ping"]
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+      containers:
+        - name: oauth2-proxy
+          image: {{ $kc.oauth2ProxyImage }}
+          envFrom:
+            - secretRef:
+                name: {{ $name }}
+          args:
+            - --http-address=0.0.0.0:4180
+            - --provider=keycloak-oidc
+            - --provider-display-name=Homelab
+            - --client-id={{ $callbackHost }}
+            # Browsers sign in at the tailnet name; the proxy redeems and verifies tokens
+            # in-cluster, since the pod is not on the tailnet.
+            - --oidc-issuer-url={{ $issuer }}
+            - --skip-oidc-discovery=true
+            - --login-url={{ $issuer }}/protocol/openid-connect/auth
+            - --redeem-url={{ $internal }}/token
+            - --oidc-jwks-url={{ $internal }}/certs
+            - --validate-url={{ $internal }}/userinfo
+            - --redirect-url=https://{{ $callbackHost }}.{{ $tailnet }}/oauth2/callback
+            # One session for every app on the tailnet domain, and redirects back to any of them.
+            - --cookie-domain={{ $tailnet }}
+            - --whitelist-domain=.{{ $tailnet }}
+            # Groups come from the client's own mapper, so no extra "groups" scope.
+            - --scope=openid email profile
+            - --code-challenge-method=S256
+            - --allowed-group=admins
+            - --email-domain=*
+            - --reverse-proxy=true
+            - --trusted-proxy-ip={{ $.Values.network.podCIDR }}
+            - --set-xauthrequest=true
+            - --skip-provider-button=true
+            - --upstream=static://202
+            - --cookie-name=_oauth2_homelab
+            - --cookie-secure=true
+            - --session-store-type=redis
+            - --redis-connection-url=redis://127.0.0.1:6379
+            # A first visit fires several requests (page, favicon) that each start a
+            # sign-in; one CSRF cookie per attempt keeps them from overwriting each other.
+            - --cookie-csrf-per-request=true
+            - --cookie-csrf-expire=5m
+          ports:
+            - name: http
+              containerPort: 4180
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            periodSeconds: 60
+          resources:
+            requests:
+              cpu: 10m
+              memory: 24Mi
+            limits:
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $kc.namespace }}
+spec:
+  selector:
+    app: {{ $name }}
+  ports:
+    - name: http
+      port: 4180
+      targetPort: 4180
+---
+# Sign-in callback and sign-out on every protected host (and the callback host).
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $name }}
+  namespace: {{ $kc.namespace }}
+spec:
+  entryPoints: [web]
+  routes:
+    - match: 'HostRegexp(`^({{ join "|" (uniq (append $hosts $callbackHost)) }})\..+\.ts\.net$`) && PathPrefix(`/oauth2/`)'
+      kind: Rule
+      middlewares:
+        - name: forwarded-https
+      services:
+        - name: {{ $name }}
+          port: 4180
+{{- range $ns, $_ := $namespaces }}
+---
+# Requests arrive over HTTPS at tailscale serve; say so before auth runs.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: sso-https
+  namespace: {{ $ns }}
+spec:
+  headers:
+    customRequestHeaders:
+      X-Forwarded-Proto: https
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: sso
+  namespace: {{ $ns }}
+spec:
+  forwardAuth:
+    address: http://{{ $name }}.{{ $kc.namespace }}.svc.cluster.local:4180/
+    trustForwardHeader: true
+    authResponseHeaders:
+      - X-Auth-Request-User
+      - X-Auth-Request-Email
+      - X-Auth-Request-Preferred-Username
+      - X-Auth-Request-Groups
+{{- end }}
+{{- end }}

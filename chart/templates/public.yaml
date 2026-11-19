@@ -1,0 +1,179 @@
+{{/* Public HTTPS: the public name keeps pointing at the home IP (ddns-updater), Traefik gets
+its certificate by DNS-01 (no port 80), and each app with public: true is served on websecure
+with the CrowdSec bouncer (crowdsec.yaml) first, then security headers and per-IP rate limits. */}}
+{{- if .Values.public.enabled }}
+{{- $p := .Values.public }}
+{{- $s := .Values.secrets }}
+{{- $domain := required "set secrets.publicDomain (your dynamic-DNS name)" $s.publicDomain }}
+{{- $token := required "set secrets.publicDnsToken (the DNS host's API token)" $s.publicDnsToken }}
+{{- if contains "CHANGE_ME" (cat $domain $token) }}
+{{- fail "fill in secrets.publicDomain and secrets.publicDnsToken in secrets/secrets.yaml" }}
+{{- end }}
+{{- $traefik := .Values.apps.traefik }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: public-dns
+  namespace: {{ $traefik.namespace }}
+type: Opaque
+stringData:
+  TOKEN: {{ $token | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ddns-updater
+  namespace: {{ $traefik.namespace }}
+type: Opaque
+stringData:
+  CONFIG: {{ dict "settings" (list (dict "provider" $p.provider "domain" $domain "token" $token "ip_version" "ipv4")) | toJson | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ddns-updater
+  namespace: {{ $traefik.namespace }}
+  labels:
+    app: ddns-updater
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: ddns-updater
+  template:
+    metadata:
+      labels:
+        app: ddns-updater
+    spec:
+      {{- include "homelab.nodeSelector" (list . "server") | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ddns-updater
+          image: {{ $p.ddnsUpdaterImage }}
+          envFrom:
+            - secretRef:
+                name: ddns-updater
+          env:
+            {{- include "homelab.tz" . | nindent 12 }}
+            # No web UI: nothing to expose.
+            - name: SERVER_ENABLED
+              value: "no"
+            # Check the record against public DNS, not Pi-hole's local answer.
+            - name: RESOLVER_ADDRESS
+              value: "1.1.1.1:53"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: data
+              mountPath: /updater/data
+      volumes:
+        - name: data
+          emptyDir: {}
+{{- /* Every public app, its full host name, and the namespaces that need the middlewares. */}}
+{{- $hosts := list }}
+{{- $namespaces := dict }}
+{{- range $name, $app := .Values.apps }}
+{{- with $app.public }}
+{{- $hosts = append $hosts (ternary $domain (printf "%s.%s" .host $domain) (eq .host "")) }}
+{{- $_ := set $namespaces $app.namespace true }}
+{{- end }}
+{{- end }}
+{{- range $ns, $_ := $namespaces }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: public-headers
+  namespace: {{ $ns }}
+spec:
+  headers:
+    stsSeconds: 31536000
+    contentTypeNosniff: true
+    referrerPolicy: same-origin
+    customFrameOptionsValue: SAMEORIGIN
+    # No Content-Security-Policy: it breaks the LG Jellyfin app.
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: public-ratelimit
+  namespace: {{ $ns }}
+spec:
+  rateLimit:
+    average: 100
+    burst: 200
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: public-login-ratelimit
+  namespace: {{ $ns }}
+spec:
+  rateLimit:
+    average: 5
+    period: 1m
+    burst: 5
+{{- end }}
+{{- range $name, $app := .Values.apps }}
+{{- with $app.public }}
+{{- $host := ternary $domain (printf "%s.%s" .host $domain) (eq .host "") }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $name }}-public
+  namespace: {{ $app.namespace }}
+spec:
+  entryPoints: [websecure]
+  routes:
+    {{- with .loginPath }}
+    # Password guessing: a few sign-in attempts per minute per IP.
+    - match: Host(`{{ $host }}`) && PathRegexp(`{{ . }}`)
+      kind: Rule
+      middlewares:
+        - name: crowdsec
+        - name: public-headers
+        - name: public-login-ratelimit
+      services:
+        - name: {{ $app.route.service }}
+          port: {{ $app.route.port }}
+    {{- end }}
+    - match: Host(`{{ $host }}`)
+      kind: Rule
+      middlewares:
+        - name: crowdsec
+        - name: public-headers
+        - name: public-ratelimit
+      services:
+        - name: {{ $app.route.service }}
+          port: {{ $app.route.port }}
+  # The same name list on every route, so Traefik requests one certificate for all of them
+  # (DuckDNS holds one TXT record, so challenges are solved one at a time).
+  tls:
+    certResolver: {{ $p.certResolver }}
+    domains:
+      - main: {{ first $hosts | quote }}
+        {{- with rest $hosts }}
+        sans:
+          {{- range . }}
+          - {{ . | quote }}
+          {{- end }}
+        {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

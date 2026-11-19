@@ -1,0 +1,50 @@
+{{- $app := .Values.apps.jellyfin }}
+# Jellyfin saves a poster for every Live TV programme in the guide (Dispatcharr's channels) and
+# never prunes them: about 1 GB and 10k files a day. Delete the ones older than
+# livetvArtworkDays each night; Jellyfin fetches artwork again if a programme needs it.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: jellyfin-livetv-prune
+  namespace: {{ $app.namespace }}
+spec:
+  schedule: "45 4 * * *"
+  timeZone: {{ .Values.timezone }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          restartPolicy: Never
+          {{- include "homelab.nodeSelector" (list . $app.node) | nindent 10 }}
+          securityContext:
+            {{- include "homelab.runAsAdmin" . | nindent 12 }}
+          containers:
+            - name: prune
+              image: busybox:1.37
+              command:
+                - sh
+                - -c
+                - |
+                  dir=/config/metadata/livetv
+                  [ -d "$dir" ] || { echo "no $dir"; exit 0; }
+                  before=$(du -sm "$dir" | cut -f1)
+                  n=$(find "$dir" -type f -mtime +{{ $app.livetvArtworkDays }} | wc -l)
+                  find "$dir" -type f -mtime +{{ $app.livetvArtworkDays }} -delete
+                  find "$dir" -mindepth 1 -type d -empty -delete
+                  echo "deleted $n files; livetv artwork ${before} MB -> $(du -sm "$dir" | cut -f1) MB"
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  memory: 64Mi
+              volumeMounts:
+                - name: config
+                  mountPath: /config
+          volumes:
+            {{- include "homelab.configVolume" (list . "config" "jellyfin/config") | nindent 12 }}
