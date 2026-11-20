@@ -393,6 +393,13 @@ apps:
       clients: [homepage]
       # Apps behind Keycloak sign-in (one shared oauth2-proxy + forward auth, admins only).
       protect: [homepage, prowlarr, radarr, sonarr, sabnzbd, pihole, dispatcharr, observability]
+      # Sign-in lifetime for the admin apps. Keycloak ends the session after idleSeconds without
+      # use or maxSeconds in all; oauth2-proxy rechecks with Keycloak every refreshSeconds, so
+      # an ended or revoked session signs you out within that time.
+      session:
+        idleSeconds: 1800      # 30 min
+        maxSeconds: 28800      # 8 h
+        refreshSeconds: 300    # 5 min
     dashboard:
       title: Keycloak
       sidecars: [postgres]
