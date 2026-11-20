@@ -115,10 +115,11 @@ spec:
             - --backend-logout-url={{ $internal }}/logout?id_token_hint={id_token}
             - --session-store-type=redis
             - --redis-connection-url=redis://127.0.0.1:6379
-            # A first visit fires several requests (page, favicon) that each start a
-            # sign-in; one CSRF cookie per attempt keeps them from overwriting each other.
+            # One CSRF cookie per sign-in attempt, so attempts started in parallel don't
+            # overwrite each other. Only page loads start one (routes.yaml), so 30 min is safe
+            # and a sign-in page left open for a while still completes.
             - --cookie-csrf-per-request=true
-            - --cookie-csrf-expire=5m
+            - --cookie-csrf-expire=30m
           ports:
             - name: http
               containerPort: 4180
