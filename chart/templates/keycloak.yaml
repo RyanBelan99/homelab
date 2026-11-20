@@ -83,6 +83,8 @@ data:
         "resetPasswordAllowed" false
         "loginWithEmailAllowed" true
         "bruteForceProtected" true
+        "ssoSessionIdleTimeout" $app.sso.session.idleSeconds
+        "ssoSessionMaxLifespan" $app.sso.session.maxSeconds
         "failureFactor" 10
         "permanentLockout" false
         "groups" (list (dict "name" "admins") (dict "name" "members"))

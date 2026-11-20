@@ -107,12 +107,19 @@ spec:
             - --upstream=static://202
             - --cookie-name=_oauth2_homelab
             - --cookie-secure=true
+            # The cookie never outlives Keycloak's maximum session, and every refresh asks
+            # Keycloak again, so its idle timeout and sign-outs apply to every app.
+            - --cookie-expire={{ $kc.sso.session.maxSeconds }}s
+            - --cookie-refresh={{ $kc.sso.session.refreshSeconds }}s
+            # /oauth2/sign_out on any app also ends the Keycloak session.
+            - --backend-logout-url={{ $internal }}/logout?id_token_hint={id_token}
             - --session-store-type=redis
             - --redis-connection-url=redis://127.0.0.1:6379
-            # A first visit fires several requests (page, favicon) that each start a
-            # sign-in; one CSRF cookie per attempt keeps them from overwriting each other.
+            # One CSRF cookie per sign-in attempt, so attempts started in parallel don't
+            # overwrite each other. Only page loads start one (routes.yaml), so 30 min is safe
+            # and a sign-in page left open for a while still completes.
             - --cookie-csrf-per-request=true
-            - --cookie-csrf-expire=5m
+            - --cookie-csrf-expire=30m
           ports:
             - name: http
               containerPort: 4180
@@ -183,6 +190,23 @@ metadata:
 spec:
   forwardAuth:
     address: http://{{ $name }}.{{ $kc.namespace }}.svc.cluster.local:4180/
+    trustForwardHeader: true
+    authResponseHeaders:
+      - X-Auth-Request-User
+      - X-Auth-Request-Email
+      - X-Auth-Request-Preferred-Username
+      - X-Auth-Request-Groups
+---
+# The same check without starting a sign-in (oauth2-proxy's /oauth2/auth answers 202 or 401 and
+# sets no CSRF cookie), for background requests; see routes.yaml.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: sso-check
+  namespace: {{ $ns }}
+spec:
+  forwardAuth:
+    address: http://{{ $name }}.{{ $kc.namespace }}.svc.cluster.local:4180/oauth2/auth
     trustForwardHeader: true
     authResponseHeaders:
       - X-Auth-Request-User

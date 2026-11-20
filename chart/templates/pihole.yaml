@@ -66,9 +66,6 @@ spec:
       containers:
         - name: pihole
           image: {{ $app.image }}
-          envFrom:
-            - secretRef:
-                name: pihole-secrets
           env:
             {{- include "homelab.tz" . | nindent 12 }}
             - name: FTLCONF_dns_listeningMode
@@ -76,9 +73,10 @@ spec:
             # Set here, not in the web UI: env wins on every restart.
             - name: FTLCONF_dns_upstreams
               value: 127.0.0.1#5053
-            # Keep the admin login (no trusted-header sign-in in Pi-hole), but for 30 days.
-            - name: FTLCONF_webserver_session_timeout
-              value: "2592000"
+            # No Pi-hole password: Keycloak is the only sign-in (Pi-hole can't trust its headers).
+            # The web port is reachable only from Traefik and Homepage (networkpolicies.yaml).
+            - name: FTLCONF_webserver_api_password
+              value: ""
             - name: FTLCONF_misc_dnsmasq_lines
               # Split DNS: at home the public name goes straight to Traefik on the LAN.
               value: address=/{{ .Values.network.localDomain }}/{{ .Values.nodes.server.ip }}{{ if .Values.public.enabled }};address=/{{ .Values.secrets.publicDomain }}/{{ .Values.nodes.server.ip }}{{ end }}

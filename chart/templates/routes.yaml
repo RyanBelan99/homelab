@@ -1,14 +1,18 @@
 {{/* One Traefik route per app with a route: <host>.<tailnet> via its Tailscale Service, plus
 <host>.<localDomain> on the LAN unless route.lan is false. The LAN path has no Tailscale policy,
-so admin apps turn it off and stay reachable only through the tailnet. */}}
+so admin apps turn it off and stay reachable only through the tailnet. Keep the main route first:
+server.sh reads each app's Service name from routes[0]. */}}
 {{- range $name, $app := .Values.apps }}
 {{- with $app.route }}
 {{- $lan := true }}
 {{- if hasKey . "lan" }}{{ $lan = .lan }}{{ end }}
-{{- $middlewares := .middlewares | default list }}
-{{- if has $name ($.Values.apps.keycloak.sso.protect | default list) }}
-{{- $middlewares = concat $middlewares (list (dict "name" "sso-https") (dict "name" "sso")) }}
+{{- $protected := has $name ($.Values.apps.keycloak.sso.protect | default list) }}
+{{- $base := .middlewares | default list }}
+{{- $middlewares := $base }}
+{{- if $protected }}
+{{- $middlewares = concat $base (list (dict "name" "sso-https") (dict "name" "sso")) }}
 {{- end }}
+{{- $match := printf "%sHostRegexp(`^%s\\..+\\.ts\\.net$`)" (ternary (printf "Host(`%s.%s`) || " .host $.Values.network.localDomain) "" $lan) .host }}
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
@@ -18,7 +22,7 @@ metadata:
 spec:
   entryPoints: [web]
   routes:
-    - match: '{{ if $lan }}Host(`{{ .host }}.{{ $.Values.network.localDomain }}`) || {{ end }}HostRegexp(`^{{ .host }}\..+\.ts\.net$`)'
+    - match: '{{ $match }}'
       kind: Rule
       {{- with $middlewares }}
       middlewares:
@@ -27,5 +31,19 @@ spec:
       services:
         - name: {{ .service }}
           port: {{ .port }}
+    {{- if $protected }}
+    # Background requests (fetch, XHR, images, websockets) only check the session: a 401 and no
+    # cookie, never a sign-in. Otherwise a tab polling after its session ends starts one sign-in
+    # per request, each with its own CSRF cookie for the whole tailnet domain, until the headers
+    # outgrow Pi-hole's 16 KB limit (400) or Node's (431). Page loads, and clients that don't send
+    # Sec-Fetch-Mode, take the route above. The longer rule wins, so this one is checked first.
+    - match: '({{ $match }}) && HeaderRegexp(`Sec-Fetch-Mode`, `^(cors|no-cors|same-origin|websocket)$`) && !PathPrefix(`/oauth2/`)'
+      kind: Rule
+      middlewares:
+        {{- toYaml (concat $base (list (dict "name" "sso-https") (dict "name" "sso-check"))) | nindent 8 }}
+      services:
+        - name: {{ .service }}
+          port: {{ .port }}
+    {{- end }}
 {{- end }}
 {{- end }}
